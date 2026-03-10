@@ -1,208 +1,197 @@
 #include <M5Stack.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <math.h>
 
-// ---------------- WIFI ----------------
+// --- TILSTANDE (STATES) ---
+enum State { MENU, BLUETOOTH, CONNECTING_WIFI, TIMER, DISTRACTION, EVALUATION, ADVICE };
+State currentState = CONNECTING_WIFI;
+
+// --- KONFIGURATION & DATA ---
 const char* ssid = "bruv";
 const char* password = "abekat38";
 String googleScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
 
-// ---------------- FOKUS DATA ----------------
-unsigned long focusDuration = 25 * 60 * 1000;
+int distractions = 0;
+int focusScore =  100;
+int selectedIndex = 3; // Standard 25 min
+int timeOptions[5] = {1, 5, 15, 25, 45};
+
+unsigned long focusDuration = timeOptions[selectedIndex] * 60 * 1000;
 unsigned long startTime = 0;
 bool sessionActive = false;
 
-int distractionCount = 0;
-int focusScore = 100;
-int points = 0;
-int level = 1;
+// Bluetooth dummy data
+const char* btDevices[] = {"Oscar's AirPods", "Noah's Headphones", "Office_Speaker"};
+int selectedBT = 0;
 
-int timeOptions[5] = {1, 5, 15, 25, 45};
-int selectedIndex = 1;
-
-// ---------------- SETUP ----------------
-void setup() {
-  M5.begin();
+// --- HJÆLPEFUNKTIONER TIL UI ---
+void drawHeader(const char* title) {
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.fillRect(0, 0, 320, 40, DARKGREY);
+  M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.fillScreen(BLACK);
-
-  connectWiFi();
-  showMenu();
+  M5.Lcd.setCursor(10, 10);
+  M5.Lcd.print(title);
+  M5.Lcd.drawFastHLine(0, 40, 320, WHITE);
 }
 
-// ---------------- LOOP ----------------
-void loop() {
-  M5.update();
-
-  if (M5.BtnA.wasPressed() && !sessionActive) {
-    selectedIndex = (selectedIndex + 1) % 3;
-    focusDuration = timeOptions[selectedIndex] * 60 * 1000;
-    showMenu();
-  }
-
-  if (M5.BtnB.wasPressed()) {
-    if (!sessionActive) startSession();
-    else endSession(false);
-  }
-
-  if (M5.BtnC.wasPressed() && sessionActive) {
-    distractionCount++;
-    showDistractionMessage();
-  }
-
-  if (sessionActive) updateTimer();
+void drawButtons(const char* btnA, const char* btnB, const char* btnC) {
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(LIGHTGREY);
+  if(btnA) { M5.Lcd.setCursor(60, 220); M5.Lcd.print(btnA); M5.Lcd.setCursor(65, 230); M5.Lcd.print("V"); }
+  if(btnB) { M5.Lcd.setCursor(150, 220); M5.Lcd.print(btnB); M5.Lcd.setCursor(155, 230); M5.Lcd.print("V"); }
+  if(btnC) { M5.Lcd.setCursor(240, 220); M5.Lcd.print(btnC); M5.Lcd.setCursor(245, 230); M5.Lcd.print("V"); }
 }
 
-// ---------------- WIFI ----------------
-void connectWiFi() {
-  WiFi.begin(ssid, password);
+// --- SKÆRM VISNINGER ---
 
-  M5.Lcd.setCursor(20, 200);
-  M5.Lcd.print("Connecting WiFi");
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    M5.Lcd.print(".");
-  }
-
-  M5.Lcd.println(" Connected!");
-}
-
-// ---------------- MENU ----------------
 void showMenu() {
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setCursor(60, 60);
-  M5.Lcd.printf("Focus: %d min", timeOptions[selectedIndex]);
-  M5.Lcd.setCursor(40, 120);
-  M5.Lcd.print("A: Change  B: Start");
+  currentState = MENU;
+  drawHeader("Focus Mode V1.0");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  M5.Lcd.printf("%d min", timeOptions[selectedIndex]);
+  drawButtons("Change", "Start", "Bluetooth");
 }
 
-// ---------------- START ----------------
-void startSession() {
-  sessionActive = true;
-  distractionCount = 0;
-  startTime = millis();
-  M5.Speaker.tone(1000, 200);
+void showBluetoothMenu() {
+  currentState = BLUETOOTH;
+  drawHeader("Bluetooth Connection");
+  for(int i = 0; i < 3; i++) {
+    int y = 60 + (i * 40);
+    if(i == selectedBT) {
+      M5.Lcd.fillRect(10, y-5, 300, 35, GREEN);
+      M5.Lcd.setTextColor(BLACK);
+    } else {
+      M5.Lcd.drawRect(10, y-5, 300, 35, WHITE);
+      M5.Lcd.setTextColor(WHITE);
+    }
+    M5.Lcd.setCursor(20, y);
+    M5.Lcd.print(btDevices[i]);
+  }
+  drawButtons("Next", "Select", "Back");
 }
 
-// ---------------- TIMER ----------------
-void updateTimer() {
+void updateTimerUI() {
   unsigned long elapsed = millis() - startTime;
-
   if (elapsed >= focusDuration) {
-    endSession(true);
+    int minutes = (elapsed / 1000) / 60;
+    int seconds = (elapsed / 1000) % 60;
+
+    char durationStr[6];
+    sprintf(durationStr, "%02d:%02d", minutes, seconds);
+
+    focusScore = 100 - (10 * distractions);
+    if (focusScore < 0) focusScore = 0;
+
+    sendToGoogleSheets(durationStr, distractions, focusScore);
+
+    currentState = EVALUATION;
+    showEvaluation();
     return;
   }
 
   unsigned long remaining = focusDuration - elapsed;
-  int seconds = (remaining / 1000) % 60;
-  int minutes = (remaining / 1000) / 60;
-
+  int m = (remaining / 1000) / 60;
+  int s = (remaining / 1000) % 60;
   float progress = (float)elapsed / focusDuration;
 
-  drawFocusUI(minutes, seconds, progress);
-}
-
-// ---------------- PROFESSIONEL UI ----------------
-void drawFocusUI(int minutes, int seconds, float progress) {
-
   M5.Lcd.fillScreen(BLACK);
-
-  int centerX = 160;
-  int centerY = 120;
-  int radius = 80;
-
-  M5.Lcd.drawCircle(centerX, centerY, radius, DARKGREY);
-
-  int angle = progress * 360;
-
-  for (int i = 0; i < angle; i++) {
-    float rad = i * DEG_TO_RAD;
-    int x = centerX + cos(rad) * radius;
-    int y = centerY + sin(rad) * radius;
-    M5.Lcd.drawPixel(x, y, GREEN);
+  // Cirkel timer
+  int cx = 160, cy = 110, r = 70;
+  M5.Lcd.drawCircle(cx, cy, r, DARKGREY);
+  
+  // Tegn fremskridts-bue (simpel version)
+  float endAngle = (progress * 360.0) - 90.0;
+  for(int i=-90; i < endAngle; i++) {
+    float rad = i * 0.01745;
+    M5.Lcd.drawPixel(cx + cos(rad)*r, cy + sin(rad)*r, GREEN);
+    M5.Lcd.drawPixel(cx + cos(rad)*(r-1), cy + sin(rad)*(r-1), GREEN);
   }
 
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(100, 100);
-  M5.Lcd.printf("%02d:%02d", minutes, seconds);
-
-  delay(200);
+  M5.Lcd.setTextSize(4);
+  M5.Lcd.setCursor(110, 100);
+  M5.Lcd.printf("%02d:%02d", m, s);
+  drawButtons(NULL, NULL, "Log Distraction");
 }
 
-void endSession(bool completed) {
+void showEvaluation() {
+  currentState = EVALUATION;
+  drawHeader("Session Evaluation");
+  M5.Lcd.setCursor(20, 80);
+  M5.Lcd.println("Were you feeling dizzy\nduring the session?");
+  drawButtons("Yes", "No", "Skip");
+}
 
-  sessionActive = false;
-
-  unsigned long elapsed = millis() - startTime;
-
-  int minutes = (elapsed / 1000) / 60;
-  int seconds = (elapsed / 1000) % 60;
-
-  char durationStr[6];
-  sprintf(durationStr, "%02d:%02d", minutes, seconds);
-
-  focusScore = 100 - (10 * distractionCount);
-  if (focusScore < 0) focusScore = 0;
-
-  if (completed) {
-    points += focusScore;
-    if (points >= level * 200) level++;
-    M5.Speaker.tone(1500, 500);
+void showAdvice(bool dizzy) {
+  currentState = ADVICE;
+  drawHeader("Advice for next time");
+  M5.Lcd.setCursor(20, 80);
+  if(dizzy) {
+    M5.Lcd.println("Since you felt dizzy,\nremember to drink water\nand take a break.");
+  } else {
+    M5.Lcd.println("Great job!");
   }
-
-  sendToGoogleSheets(
-    durationStr,
-    distractionCount,
-    focusScore,
-    points
-  );
-
-  showResult(completed);
+  drawButtons(NULL, "Finish", NULL);
 }
 
-// ---------------- RESULT ----------------
-void showResult(bool completed) {
+// --- SETUP & LOOP ---
 
-  M5.Lcd.fillScreen(BLACK);
-
-  uint16_t color;
-  if (focusScore > 70) color = GREEN;
-  else if (focusScore > 40) color = YELLOW;
-  else color = RED;
-
-  M5.Lcd.setTextColor(color);
-  M5.Lcd.setCursor(40, 40);
-
-  if (completed) M5.Lcd.print("Session Complete!");
-  else M5.Lcd.print("Session Stopped");
-
-  M5.Lcd.setTextColor(WHITE);
-
-  M5.Lcd.setCursor(40, 80);
-  M5.Lcd.printf("Distractions: %d", distractionCount);
-
-  M5.Lcd.setCursor(40, 110);
-  M5.Lcd.printf("Score: %d", focusScore);
-
-  M5.Lcd.setCursor(40, 140);
-  M5.Lcd.printf("Level: %d", level);
-
-  delay(5000);
+void setup() {
+  M5.begin();
+  M5.Lcd.setBrightness(100);
+  
+  // WiFi Start
+  drawHeader("Welcome");
+  M5.Lcd.setCursor(20, 100);
+  M5.Lcd.print("Connecting to Wi-Fi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); }
+  
   showMenu();
 }
 
-// ---------------- DISTRACTION ----------------
-void showDistractionMessage() {
-  M5.Lcd.fillScreen(RED);
-  M5.Lcd.setCursor(40, 100);
-  M5.Lcd.print("Distraction Logged!");
-  delay(800);
+void loop() {
+  M5.update();
+
+  if (currentState == MENU) {
+    if (M5.BtnA.wasPressed()) { selectedIndex = (selectedIndex + 1) % 5; focusDuration = timeOptions[selectedIndex] * 60 * 1000; showMenu(); }
+    if (M5.BtnB.wasPressed()) { 
+      startTime = millis(); 
+      distractions = 0; 
+      currentState = TIMER; 
+    }
+    if (M5.BtnC.wasPressed()) showBluetoothMenu();
+  } 
+  
+  else if (currentState == BLUETOOTH) {
+    if (M5.BtnA.wasPressed()) { selectedBT = (selectedBT + 1) % 3; showBluetoothMenu(); }
+    if (M5.BtnB.wasPressed()) showMenu(); // I virkeligheden ville den forbinde her
+    if (M5.BtnC.wasPressed()) showMenu();
+  }
+
+  else if (currentState == TIMER) {
+    updateTimerUI();
+    if (M5.BtnC.wasPressed()) {
+      distractions++;
+      M5.Lcd.fillScreen(RED);
+      delay(200); // Hurtigt visuelt feedback
+    }
+  }
+
+  else if (currentState == EVALUATION) {
+    if (M5.BtnA.wasPressed()) showAdvice(true);
+    if (M5.BtnB.wasPressed()) showAdvice(false);
+    if (M5.BtnC.wasPressed()) showMenu();
+  }
+
+  else if (currentState == ADVICE) {
+    if (M5.BtnB.wasPressed()) showMenu();
+  }
 }
 
 // ---------------- GOOGLE LOGGING ----------------
-void sendToGoogleSheets(String duration, int distractions, int score, int pts) {
+void sendToGoogleSheets(String duration, int distractions, int score) {
 
   if (WiFi.status() == WL_CONNECTED) {
 
@@ -212,7 +201,6 @@ void sendToGoogleSheets(String duration, int distractions, int score, int pts) {
     url += "?duration=" + duration;
     url += "&distractions=" + String(distractions);
     url += "&score=" + String(score);
-    url += "&points=" + String(pts);
 
     Serial.println(url);
 
