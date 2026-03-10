@@ -6,7 +6,7 @@
 // ---------------- WIFI ----------------
 const char* ssid = "bruv";
 const char* password = "abekat38";
-String googleScriptURL = "https://script.google.com/macros/s/AKfycbxYxv8DwFWoNnR4I3y2irrx5B-CCwvroIhKpIhQcgxCchSv44cJkK0CWBHdNYAB2FMx_g/exec";
+String googleScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
 
 // ---------------- FOKUS DATA ----------------
 unsigned long focusDuration = 25 * 60 * 1000;
@@ -202,7 +202,7 @@ void showDistractionMessage() {
 }
 
 // ---------------- GOOGLE LOGGING ----------------
-void sendToGoogleSheets(String duration, int distractions, int score, int pts, int lvl) {
+void sendToGoogleSheets(String duration, int distractions, int score, int pts) {
 
   if (WiFi.status() == WL_CONNECTED) {
 
@@ -213,7 +213,6 @@ void sendToGoogleSheets(String duration, int distractions, int score, int pts, i
     url += "&distractions=" + String(distractions);
     url += "&score=" + String(score);
     url += "&points=" + String(pts);
-    url += "&level=" + String(lvl);
 
     Serial.println(url);
 
