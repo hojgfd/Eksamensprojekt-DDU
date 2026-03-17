@@ -13,7 +13,7 @@ const char* todoLists[] = {"MyList", "Blud", "Shekibruv"};
 const char* ssid = "bruv";
 const char* password = "abekat38";
 String focusModeScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
-String todoListScriptURL = "https://script.google.com/macros/s/AKfycbwpo7tY9ORE_DVNJHucpZv39JJ7U6dyVGdxa-wFIeAkXUe00jXHyhnjGT38Pkmvp4Oc/exec";
+String todoListScriptURL = "https://script.google.com/macros/s/AKfycbwN77msMJeL7C9lNwfTEJm5I1AzLCQkB_rHU80_Ap3GtPbxPGt3xJa-u9O7aMKoOmuJ/exec";
 const char* selectedTodoList = todoLists[0];
 
 int distractions = 0;
@@ -331,7 +331,23 @@ void loop() {
     if (M5.BtnB.wasPressed()) showMenu();
     break;
 
+    case CONFIRM:
 
+    if (M5.BtnA.wasPressed()) {
+      // send til Google Sheets
+      sendTodoToGoogleSheets(selectedTodoList, inputText);
+
+      inputText = ""; // reset input
+      showTODOMenu();
+    }
+
+    if (M5.BtnB.wasPressed()) {
+      // tilbage
+      currentState = USER_INPUT;
+      showUserInput();
+    }
+
+    break;
   }
 }
 
@@ -346,6 +362,26 @@ void sendToGoogleSheets(String duration, int distractions, int score) {
     url += "?duration=" + duration;
     url += "&distractions=" + String(distractions);
     url += "&score=" + String(score);
+
+    Serial.println(url);
+
+    http.begin(url);
+    http.GET();
+    http.end();
+  }
+}
+
+void sendTodoToGoogleSheets(String list, String task) {
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    HTTPClient http;
+
+    task.replace(" ", "%20");
+
+    String url = todoListScriptURL;
+    url += "?list=" + list;
+    url += "&task=" + task;
 
     Serial.println(url);
 
