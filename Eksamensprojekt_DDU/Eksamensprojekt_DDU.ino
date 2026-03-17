@@ -3,13 +3,18 @@
 #include <HTTPClient.h>
 
 // --- TILSTANDE (STATES) ---
-enum State { MENU, CONNECTING_WIFI, TIMER, /*DISTRACTION,*/ EVALUATION, ADVICE };
+enum State { NEW_TASK, REMOVE_TASK, USER_INPUT, CONFIRM, 
+MENU, FOCUS_MODE, TODO_LIST, CONNECTING_WIFI, TIMER, EVALUATION, ADVICE,
+LIST_MENU };
 State currentState = CONNECTING_WIFI;
 
 // --- KONFIGURATION & DATA ---
+const char* todoLists[] = {"MyList", "Blud", "Shekibruv"};
 const char* ssid = "bruv";
 const char* password = "abekat38";
-String googleScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
+String focusModeScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
+String todoListScriptURL = "https://script.google.com/macros/s/AKfycbwpo7tY9ORE_DVNJHucpZv39JJ7U6dyVGdxa-wFIeAkXUe00jXHyhnjGT38Pkmvp4Oc/exec";
+const char* selectedTodoList = todoLists[0];
 
 int distractions = 0;
 int focusScore =  100;
@@ -19,6 +24,19 @@ int timeOptions[5] = {1, 5, 15, 25, 45};
 unsigned long focusDuration = timeOptions[selectedIndex] * 60 * 1000;
 unsigned long startTime = 0;
 bool sessionActive = false;
+
+
+String inputText = "";
+
+const char* keyboard[] = {
+  "A","B","C","D","E","F","G","H","I","J",
+  "K","L","M","N","O","P","Q","R","S","T",
+  "U","V","W","X","Y","Z","<-","OK"
+};
+
+int keyboardSize = 28;
+
+int cursorIndex = 0;
 
 // --- HJÆLPEFUNKTIONER TIL UI ---
 void drawHeader(const char* title) {
@@ -43,11 +61,93 @@ void drawButtons(const char* btnA, const char* btnB, const char* btnC) {
 
 void showMenu() {
   currentState = MENU;
-  drawHeader("Focus Mode V1.0");
+  drawHeader("Main Menu");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  drawButtons("Focus Mode", "TODO-List", NULL);
+}
+
+void showFocusMode() {
+  currentState = FOCUS_MODE;
+  drawHeader("Focus Mode");
   M5.Lcd.setTextSize(3);
   M5.Lcd.setCursor(60, 100);
   M5.Lcd.printf("%d min", timeOptions[selectedIndex]);
-  drawButtons("Change", "Start", "Placeholder");
+  drawButtons("Change", "Start", NULL);
+}
+
+void showTODOMenu() {
+  drawHeader("TODO-List");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  drawButtons("New", "Open", NULL);
+}
+
+void showSelectList() {
+  drawHeader("Select TODO-List");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  drawButtons("Up", "Down", "Select");
+}
+
+void showListMenu() {
+  drawHeader(selectedTodoList);
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  drawButtons("Change", "Select", "Mark as done");
+
+}
+
+void showUserInput() {
+
+  drawHeader("User Input");
+
+  M5.Lcd.setTextSize(2);
+
+  int startX = 20;
+  int startY = 60;
+  int cols = 10;
+
+  for (int i = 0; i < keyboardSize; i++) {
+    
+    int x = startX + (i % cols) * 28;
+    int y = startY + (i / cols) * 30;
+
+    if (i == cursorIndex) {
+      M5.Lcd.fillRect(x-2, y-2, 26, 24, GREEN);
+      M5.Lcd.setTextColor(BLACK);
+    } else {
+      M5.Lcd.setTextColor(WHITE);
+    }
+    if (keyboard[i] == "<-") {
+      M5.Lcd.setTextColor(RED);
+    } else if (keyboard[i] == "OK") {
+      M5.Lcd.setTextColor(GREEN);
+    }
+    M5.Lcd.setCursor(x, y);
+    M5.Lcd.print(keyboard[i]);
+  }
+
+  // Input tekst
+  M5.Lcd.setTextColor(YELLOW);
+  M5.Lcd.setCursor(20, 170);
+  M5.Lcd.print("Input: " + inputText);
+
+  drawButtons("Left", "Right", "Select");
+}
+
+void showRemoveTask() {
+  drawHeader("Please select task to remove");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  drawButtons("Up", "Down", "Remove");
+}
+
+void showConfirmInput() {
+  drawHeader("Are you sure?");
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(60, 100);
+  drawButtons("Yes", "No", NULL);
 }
 
 void updateTimerUI() {
@@ -133,16 +233,82 @@ void loop() {
   M5.update();
 
   switch(currentState){
-    case MENU:
+    case USER_INPUT:
+      // venstre
+      if (M5.BtnA.wasPressed()) {
+        cursorIndex--;
+        if (cursorIndex < 0) cursorIndex = keyboardSize - 1;
+        showUserInput();
+      }
+
+      // højre
+      if (M5.BtnB.wasPressed()) {
+        cursorIndex++;
+        if (cursorIndex >= keyboardSize) cursorIndex = 0;
+        showUserInput();
+      }
+
+      // select
+      if (M5.BtnC.wasPressed()) {
+
+        String selected = keyboard[cursorIndex];
+
+        if (selected == "<-") {
+          // 🔙 backspace
+          if (inputText.length() > 0) {
+            inputText.remove(inputText.length() - 1);
+          }
+        }
+        else if (selected == "OK") {
+          // færdig
+          currentState = CONFIRM;
+          showConfirmInput();
+          return;
+        }
+        else {
+          // bogstav
+          inputText += selected;
+        }
+
+        showUserInput();
+      }
+  break;
+
+    case TODO_LIST:
+   
+    if (M5.BtnA.wasPressed()) {
+      inputText = "";
+      cursorIndex = 0;
+      currentState = USER_INPUT;
+      showUserInput();
+    }
+    if (M5.BtnB.wasPressed()) { 
+      currentState = LIST_MENU; 
+    }
+
+    break;
+
+    case FOCUS_MODE:
     if (M5.BtnA.wasPressed()) { 
       selectedIndex = (selectedIndex + 1) % 5;
       focusDuration = timeOptions[selectedIndex] * 60 * 1000;
-      showMenu(); 
+      showFocusMode(); 
       }
     if (M5.BtnB.wasPressed()) { 
       startTime = millis(); 
       distractions = 0; 
       currentState = TIMER; 
+    }
+
+
+    break;
+    case MENU:
+    if (M5.BtnA.wasPressed()) { 
+      currentState = FOCUS_MODE;
+    }
+    if (M5.BtnB.wasPressed()) { 
+      currentState = TODO_LIST;
+      showTODOMenu();
     }
 
     break;
@@ -176,7 +342,7 @@ void sendToGoogleSheets(String duration, int distractions, int score) {
 
     HTTPClient http;
 
-    String url = googleScriptURL;
+    String url = focusModeScriptURL;
     url += "?duration=" + duration;
     url += "&distractions=" + String(distractions);
     url += "&score=" + String(score);
