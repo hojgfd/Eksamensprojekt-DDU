@@ -3,7 +3,7 @@
 #include <HTTPClient.h>
 
 // --- TILSTANDE (STATES) ---
-enum State { MENU, BLUETOOTH, CONNECTING_WIFI, TIMER, DISTRACTION, EVALUATION, ADVICE };
+enum State { MENU, CONNECTING_WIFI, TIMER, /*DISTRACTION,*/ EVALUATION, ADVICE };
 State currentState = CONNECTING_WIFI;
 
 // --- KONFIGURATION & DATA ---
@@ -19,10 +19,6 @@ int timeOptions[5] = {1, 5, 15, 25, 45};
 unsigned long focusDuration = timeOptions[selectedIndex] * 60 * 1000;
 unsigned long startTime = 0;
 bool sessionActive = false;
-
-// Bluetooth dummy data
-const char* btDevices[] = {"Oscar's AirPods", "Noah's Headphones", "Office_Speaker"};
-int selectedBT = 0;
 
 // --- HJÆLPEFUNKTIONER TIL UI ---
 void drawHeader(const char* title) {
@@ -51,25 +47,7 @@ void showMenu() {
   M5.Lcd.setTextSize(3);
   M5.Lcd.setCursor(60, 100);
   M5.Lcd.printf("%d min", timeOptions[selectedIndex]);
-  drawButtons("Change", "Start", "Bluetooth");
-}
-
-void showBluetoothMenu() {
-  currentState = BLUETOOTH;
-  drawHeader("Bluetooth Connection");
-  for(int i = 0; i < 3; i++) {
-    int y = 60 + (i * 40);
-    if(i == selectedBT) {
-      M5.Lcd.fillRect(10, y-5, 300, 35, GREEN);
-      M5.Lcd.setTextColor(BLACK);
-    } else {
-      M5.Lcd.drawRect(10, y-5, 300, 35, WHITE);
-      M5.Lcd.setTextColor(WHITE);
-    }
-    M5.Lcd.setCursor(20, y);
-    M5.Lcd.print(btDevices[i]);
-  }
-  drawButtons("Next", "Select", "Back");
+  drawButtons("Change", "Start", "Placeholder");
 }
 
 void updateTimerUI() {
@@ -154,39 +132,40 @@ void setup() {
 void loop() {
   M5.update();
 
-  if (currentState == MENU) {
-    if (M5.BtnA.wasPressed()) { selectedIndex = (selectedIndex + 1) % 5; focusDuration = timeOptions[selectedIndex] * 60 * 1000; showMenu(); }
+  switch(currentState){
+    case MENU:
+    if (M5.BtnA.wasPressed()) { 
+      selectedIndex = (selectedIndex + 1) % 5;
+      focusDuration = timeOptions[selectedIndex] * 60 * 1000;
+      showMenu(); 
+      }
     if (M5.BtnB.wasPressed()) { 
       startTime = millis(); 
       distractions = 0; 
       currentState = TIMER; 
     }
-    if (M5.BtnC.wasPressed()) showBluetoothMenu();
-  } 
-  
-  else if (currentState == BLUETOOTH) {
-    if (M5.BtnA.wasPressed()) { selectedBT = (selectedBT + 1) % 3; showBluetoothMenu(); }
-    if (M5.BtnB.wasPressed()) showMenu(); // I virkeligheden ville den forbinde her
-    if (M5.BtnC.wasPressed()) showMenu();
-  }
 
-  else if (currentState == TIMER) {
+    break;
+    case TIMER:
     updateTimerUI();
     if (M5.BtnC.wasPressed()) {
       distractions++;
       M5.Lcd.fillScreen(RED);
       delay(200); // Hurtigt visuelt feedback
     }
-  }
 
-  else if (currentState == EVALUATION) {
+    break;
+    case EVALUATION:
     if (M5.BtnA.wasPressed()) showAdvice(true);
     if (M5.BtnB.wasPressed()) showAdvice(false);
     if (M5.BtnC.wasPressed()) showMenu();
-  }
 
-  else if (currentState == ADVICE) {
+    break;
+    case ADVICE:
     if (M5.BtnB.wasPressed()) showMenu();
+    break;
+
+
   }
 }
 
