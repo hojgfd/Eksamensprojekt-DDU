@@ -24,12 +24,11 @@ int selectedListIndex = 0;
 int selectedTaskIndex = 0;  // Index of the currently selected task in OPEN_LIST
 
 // --- TILSTANDE (STATES) ---
-enum State {
-  NEW_TASK, REMOVE_TASK, USER_INPUT, CONFIRM,
-  MENU, FOCUS_MODE, TODO_LIST, CONNECTING_WIFI, TIMER, EVALUATION, ADVICE,
-  LIST_MENU,
-  SELECT_LIST,   // Added
-  OPEN_LIST      // Added
+enum State { 
+    NEW_TASK, REMOVE_TASK, USER_INPUT, CONFIRM, 
+    MENU, FOCUS_MODE, TODO_LIST, CONNECTING_WIFI, TIMER, 
+    EVALUATION, ADVICE, LIST_MENU, SELECT_LIST, OPEN_LIST,
+    EDIT_TASKS_MENU, SELECT_TASK_TO_DELETE
 };
 
 State currentState = CONNECTING_WIFI;
@@ -368,6 +367,8 @@ enum InputAction {
 
 InputAction nextStateAfterInput = NONE;
 
+int previousSelectedListIndex = -1;
+
 void loop() {
   M5.update();
 
@@ -501,11 +502,23 @@ void loop() {
     break;
 
     case SELECT_LIST:
-        // Up/Down selection
-        if(M5.BtnA.wasPressed()) selectedListIndex = max(0, selectedListIndex-1);
-        if(M5.BtnB.wasPressed()) selectedListIndex = min(todoListCount-1, selectedListIndex+1);
-        if(M5.BtnC.wasPressed()) showListTasksMenu();
-        break;
+      if(M5.BtnA.wasPressed()) { // Up
+          if (selectedListIndex > 0) selectedListIndex--;
+      }
+      if(M5.BtnB.wasPressed()) { // Down
+          if (selectedListIndex < todoListCount - 1) selectedListIndex++;
+      }
+      if(M5.BtnC.wasPressed()) { // Select list
+          showListTasksMenu();
+          break; // don’t redraw select menu
+      }
+
+      // Redraw only if selection changed
+      if(selectedListIndex != previousSelectedListIndex) {
+          previousSelectedListIndex = selectedListIndex;
+          showSelectListMenu();
+      }
+      break;
 
     case OPEN_LIST:
         if(M5.BtnA.wasPressed()) {
