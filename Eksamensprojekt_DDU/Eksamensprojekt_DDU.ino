@@ -21,21 +21,23 @@ struct TodoList {
 TodoList todoLists[MAX_LISTS];
 int todoListCount = 0;
 int selectedListIndex = 0;
+int selectedTaskIndex = 0;  // Index of the currently selected task in OPEN_LIST
 
 // --- TILSTANDE (STATES) ---
-enum State { NEW_TASK, REMOVE_TASK, USER_INPUT, CONFIRM, 
-MENU, FOCUS_MODE, TODO_LIST, CONNECTING_WIFI, TIMER, EVALUATION, ADVICE,
-LIST_MENU };
+enum State {
+  NEW_TASK, REMOVE_TASK, USER_INPUT, CONFIRM,
+  MENU, FOCUS_MODE, TODO_LIST, CONNECTING_WIFI, TIMER, EVALUATION, ADVICE,
+  LIST_MENU,
+  SELECT_LIST,   // Added
+  OPEN_LIST      // Added
+};
+
 State currentState = CONNECTING_WIFI;
 
 // --- KONFIGURATION & DATA ---
-//const char* todoLists[] = {"MyList", "Blud", "Shekibruv"};
 const char* ssid = "bruv";
 const char* password = "abekat38";
 const char* serverURL = "https://oscar12345.pythonanywhere.com"; // CHANGE THIS
-//String focusModeScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
-//String todoListScriptURL = "https://script.google.com/macros/s/AKfycbzMD603Ly5ewvXlU_VO5c-l02BwZDrjCSn1hZ_-hXMfLDpoLShmScleVP63aRHoMYyM/exec";
-//const char* selectedTodoList = todoLists[0];
 
 int distractions = 0;
 int focusScore =  100;
@@ -46,10 +48,7 @@ unsigned long focusDuration = timeOptions[selectedIndex] * 60 * 1000;
 unsigned long startTime = 0;
 bool sessionActive = false;
 
-#define MAX_TASKS 10
 
-String taskBuffer[MAX_TASKS];
-int taskCount = 0;
 
 
 String inputText = "";
@@ -90,23 +89,6 @@ String encodeURL(String str) {
   return encoded;
 }
 
-// --- SERIALIZE TASK ARRAY ---
-String serializeTasks() {
-
-  String result = "";
-
-  for (int i = 0; i < taskCount; i++) {
-    result += taskBuffer[i];
-    if (i < taskCount - 1) result += "|";
-  }
-
-  return result;
-}
-
-
-
-
-
 // --- HJÆLPEFUNKTIONER TIL UI ---
 void drawHeader(const char* title) {
   M5.Lcd.fillScreen(BLACK);
@@ -145,12 +127,13 @@ void showFocusMode() {
   drawButtons("Change", "Start", NULL);
 }
 
-void createNewList(String listName) {
-  if(todoListCount < MAX_LISTS) {
-    todoLists[todoListCount].name = listName;
-    todoLists[todoListCount].taskCount = 0;
-    todoListCount++;
-  }
+
+void createNewListFromInput(String name) {
+    if(todoListCount < MAX_LISTS) {
+        todoLists[todoListCount].name = name;
+        todoLists[todoListCount].taskCount = 0;
+        todoListCount++;
+    }
 }
 
 void addTaskToList(int listIndex, String taskName) {
@@ -176,14 +159,18 @@ void removeTaskFromList(int listIndex, int taskIndex) {
   }
 }
 
-void showTODOMenu() {
-  drawHeader("TODO-List");
 
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(40, 80);
-  M5.Lcd.printf("Tasks: %d", taskCount);
+void showTODOListsMenu() {
+    currentState = LIST_MENU;
+    drawHeader("TODO Lists");
 
-  drawButtons("New", "Send All", NULL);
+    M5.Lcd.setTextSize(2);
+    for(int i = 0; i < todoListCount; i++){
+        M5.Lcd.setCursor(20, 60 + i*20);
+        M5.Lcd.printf("%d. %s", i + 1, todoLists[i].name.c_str());
+    }
+
+    drawButtons("New List", "Open List", "Send All");
 }
 
 void showSelectList() {
@@ -193,7 +180,7 @@ void showSelectList() {
   drawButtons("Up", "Down", "Select");
 }
 
-void showListMenu() {
+/*void showListMenu() {
   drawHeader(todoLists[selectedListIndex].name.c_str());
   M5.Lcd.setTextSize(2);
   
@@ -205,7 +192,7 @@ void showListMenu() {
   }
   
   drawButtons("New Task", "Delete Task", "Send All");
-}
+}*/
 
 void showUserInput() {
 
@@ -302,6 +289,41 @@ void updateTimerUI() {
   drawButtons(NULL, NULL, "Log Distraction");
 }
 
+void showListTasksMenu() {
+    currentState = OPEN_LIST;
+    drawHeader(todoLists[selectedListIndex].name.c_str());
+    
+    for(int i = 0; i < todoLists[selectedListIndex].taskCount; i++){
+        M5.Lcd.setCursor(20, 60 + i*20);
+        if(i == selectedTaskIndex){
+            M5.Lcd.setTextColor(GREEN);
+        } else {
+            M5.Lcd.setTextColor(WHITE);
+        }
+        M5.Lcd.printf("%d. %s %s", i+1, 
+            todoLists[selectedListIndex].tasks[i].name.c_str(),
+            todoLists[selectedListIndex].tasks[i].completed ? "[X]" : "[ ]");
+    }
+
+    drawButtons("Edit Task", "Toggle Done", "Back");
+}
+
+void showSelectListMenu() {
+    currentState = SELECT_LIST;
+    drawHeader("Select List");
+
+    for(int i=0; i<todoListCount; i++){
+        M5.Lcd.setCursor(20, 60 + i*20);
+        if(i == selectedListIndex){
+            M5.Lcd.setTextColor(GREEN);
+        } else {
+            M5.Lcd.setTextColor(WHITE);
+        }
+        M5.Lcd.print(todoLists[i].name);
+    }
+    drawButtons("Up", "Down", "Select");
+}
+
 void showEvaluation() {
   currentState = EVALUATION;
   drawHeader("Session Evaluation");
@@ -338,73 +360,79 @@ void setup() {
   showMenu();
 }
 
+enum InputAction {
+  NONE,
+  LIST_MENU_CREATE,   // Creating a new TODO list
+  EDIT_TASK           // Editing a task in an existing list
+};
+
+InputAction nextStateAfterInput = NONE;
+
 void loop() {
   M5.update();
 
   switch(currentState){
     case USER_INPUT:
-      // venstre
-      if (M5.BtnA.wasPressed()) {
-        cursorIndex--;
-        if (cursorIndex < 0) cursorIndex = keyboardSize - 1;
-        showUserInput();
+    // Navigate left
+    if (M5.BtnA.wasPressed()) {
+      cursorIndex--;
+      if (cursorIndex < 0) cursorIndex = keyboardSize - 1;
+      showUserInput();
+    }
+
+    // Navigate right
+    if (M5.BtnB.wasPressed()) {
+      cursorIndex++;
+      if (cursorIndex >= keyboardSize) cursorIndex = 0;
+      showUserInput();
+    }
+
+    // Select key
+    if (M5.BtnC.wasPressed()) {
+      String selected = keyboard[cursorIndex];
+
+      if (selected == "<-") {
+        // Backspace
+        if (inputText.length() > 0) inputText.remove(inputText.length() - 1);
+      } else if (selected == "OK") {
+        // Finished input
+        currentState = CONFIRM;
+        showConfirmInput();
+        return;
+      } else {
+        // Add character
+        inputText += selected;
       }
 
-      // højre
-      if (M5.BtnB.wasPressed()) {
-        cursorIndex++;
-        if (cursorIndex >= keyboardSize) cursorIndex = 0;
-        showUserInput();
-      }
-
-      // select
-      if (M5.BtnC.wasPressed()) {
-
-        String selected = keyboard[cursorIndex];
-
-        if (selected == "<-") {
-          // 🔙 backspace
-          if (inputText.length() > 0) {
-            inputText.remove(inputText.length() - 1);
-          }
-        }
-        else if (selected == "OK") {
-          // færdig
-          currentState = CONFIRM;
-          showConfirmInput();
-          return;
-        }
-        else {
-          // bogstav
-          inputText += selected;
-        }
-
-        showUserInput();
-      }
+      showUserInput();
+    }
   break;
 
-    case TODO_LIST:
-
-      // NEW TASK
-      if (M5.BtnA.wasPressed()) {
-        inputText = "";
-        cursorIndex = 0;
-        currentState = USER_INPUT;
-        showUserInput();
+  case CONFIRM:
+    if (M5.BtnA.wasPressed()) {
+      // Confirm input
+      if (nextStateAfterInput == LIST_MENU_CREATE) {
+        createNewListFromInput(inputText);
+      } 
+      else if (nextStateAfterInput == EDIT_TASK) {
+        todoLists[selectedListIndex].tasks[selectedTaskIndex].name = inputText;
       }
 
-      // SEND ALL TASKS
-      if (M5.BtnB.wasPressed()) {
+      // Reset temporary input state
+      inputText = "";
+      nextStateAfterInput = NONE;
 
-        if (taskCount > 0) {
-          sendAllListsToServer();
-          taskCount = 0;
-        }
+      // Return to list menu
+      showTODOListsMenu();
+      currentState = LIST_MENU;
+    }
 
-        showTODOMenu();
-      }
-
-    break;
+    if (M5.BtnB.wasPressed()) {
+      // Cancel → return to input editing
+      currentState = USER_INPUT;
+      showUserInput();
+    }
+  break;
 
     case FOCUS_MODE:
     if (M5.BtnA.wasPressed()) { 
@@ -426,7 +454,7 @@ void loop() {
     }
     if (M5.BtnB.wasPressed()) { 
       currentState = TODO_LIST;
-      showTODOMenu();
+      showTODOListsMenu();
     }
 
     break;
@@ -449,45 +477,54 @@ void loop() {
     if (M5.BtnB.wasPressed()) showMenu();
     break;
 
-  case CONFIRM:
-
-    if (M5.BtnA.wasPressed()) {
-
-      if (taskCount < MAX_TASKS) {
-        taskBuffer[taskCount] = inputText;
-        taskCount++;
-      }
-
-      inputText = "";
-      currentState = TODO_LIST;
-      showTODOMenu();
+  
+    case LIST_MENU:
+    if(M5.BtnA.wasPressed()){ 
+        // New List → go to user input
+        inputText = "";
+        cursorIndex = 0;
+        currentState = USER_INPUT;
+        nextStateAfterInput = LIST_MENU_CREATE; // custom enum to know what to do with input
+        showUserInput();
     }
-
-    if (M5.BtnB.wasPressed()) {
-      currentState = USER_INPUT;
-      showUserInput();
+    if(M5.BtnB.wasPressed()){ 
+        // Open List
+        selectedListIndex = 0;
+        selectedTaskIndex = 0;
+        showSelectListMenu();
     }
-
+    if(M5.BtnC.wasPressed()){ 
+        // Send all data
+        sendAllListsToServer();
+        showTODOListsMenu();
+    }
     break;
+
+    case SELECT_LIST:
+        // Up/Down selection
+        if(M5.BtnA.wasPressed()) selectedListIndex = max(0, selectedListIndex-1);
+        if(M5.BtnB.wasPressed()) selectedListIndex = min(todoListCount-1, selectedListIndex+1);
+        if(M5.BtnC.wasPressed()) showListTasksMenu();
+        break;
+
+    case OPEN_LIST:
+        if(M5.BtnA.wasPressed()) {
+            // Edit task → copy name to inputText and open USER_INPUT
+            inputText = todoLists[selectedListIndex].tasks[selectedTaskIndex].name;
+            currentState = USER_INPUT;
+            nextStateAfterInput = EDIT_TASK;
+        }
+        if(M5.BtnB.wasPressed()) {
+            // Toggle completed
+            todoLists[selectedListIndex].tasks[selectedTaskIndex].completed = 
+                !todoLists[selectedListIndex].tasks[selectedTaskIndex].completed;
+            showListTasksMenu();
+        }
+        if(M5.BtnC.wasPressed()) showTODOListsMenu();
+        break;
   }
 }
 
-// ---------------- HANDLE JSON ----------------
-String buildTasksJSON() {
-  String json = "[";
-
-  for (int i = 0; i < taskCount; i++) {
-    json += "{";
-    json += "\"tasknum\":" + String(i + 1) + ",";
-    json += "\"completed\":false";
-    json += "}";
-
-    if (i < taskCount - 1) json += ",";
-  }
-
-  json += "]";
-  return json;
-}
 
 
 // ---------------- FOCUS SERVER POST REQ ----------------
@@ -521,36 +558,7 @@ void sendFocusToServer(String duration, int distractions, int score) {
 
   http.end();
 }
-/*
-// ---------------- TODO SERVER POST REQ ----------------
-void sendTodoToServer() {
 
-  if (WiFi.status() != WL_CONNECTED) return;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-
-  HTTPClient http;
-
-  String url = String(serverURL) + "/todolist";
-  http.begin(client, url);
-  http.addHeader("Content-Type", "application/json");
-
-  String json = "{";
-  json += "\"tasks\":" + buildTasksJSON();
-  json += "}";
-
-  Serial.println("Sending JSON:");
-  Serial.println(json);
-
-  int httpResponseCode = http.POST(json);
-
-  Serial.print("Todo response: ");
-  Serial.println(httpResponseCode);
-
-  http.end();
-}
-*/
 String buildAllListsJSON() {
   String json = "[";
   for(int l = 0; l < todoListCount; l++){
