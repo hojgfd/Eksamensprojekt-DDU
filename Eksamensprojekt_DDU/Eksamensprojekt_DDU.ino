@@ -1,6 +1,26 @@
 #include <M5Stack.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+// --- DATA STRUKTUR ---
+#define MAX_LISTS 5
+#define MAX_TASKS 10
+
+struct Task {
+  String name;
+  bool completed;
+};
+
+struct TodoList {
+  String name;
+  Task tasks[MAX_TASKS];
+  int taskCount;
+};
+
+TodoList todoLists[MAX_LISTS];
+int todoListCount = 0;
+int selectedListIndex = 0;
 
 // --- TILSTANDE (STATES) ---
 enum State { NEW_TASK, REMOVE_TASK, USER_INPUT, CONFIRM, 
@@ -9,12 +29,13 @@ LIST_MENU };
 State currentState = CONNECTING_WIFI;
 
 // --- KONFIGURATION & DATA ---
-const char* todoLists[] = {"MyList", "Blud", "Shekibruv"};
+//const char* todoLists[] = {"MyList", "Blud", "Shekibruv"};
 const char* ssid = "bruv";
 const char* password = "abekat38";
-String focusModeScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
-String todoListScriptURL = "https://script.google.com/macros/s/AKfycbwN77msMJeL7C9lNwfTEJm5I1AzLCQkB_rHU80_Ap3GtPbxPGt3xJa-u9O7aMKoOmuJ/exec";
-const char* selectedTodoList = todoLists[0];
+const char* serverURL = "https://oscar12345.pythonanywhere.com"; // CHANGE THIS
+//String focusModeScriptURL = "https://script.google.com/macros/s/AKfycbzl-xnkj_sglk8RS-LRgqJD_A63JQqANr5PPeK2SSnt7V69cWobKSwpVCzhxdU8W3SRBQ/exec";
+//String todoListScriptURL = "https://script.google.com/macros/s/AKfycbzMD603Ly5ewvXlU_VO5c-l02BwZDrjCSn1hZ_-hXMfLDpoLShmScleVP63aRHoMYyM/exec";
+//const char* selectedTodoList = todoLists[0];
 
 int distractions = 0;
 int focusScore =  100;
@@ -24,6 +45,11 @@ int timeOptions[5] = {1, 5, 15, 25, 45};
 unsigned long focusDuration = timeOptions[selectedIndex] * 60 * 1000;
 unsigned long startTime = 0;
 bool sessionActive = false;
+
+#define MAX_TASKS 10
+
+String taskBuffer[MAX_TASKS];
+int taskCount = 0;
 
 
 String inputText = "";
@@ -37,6 +63,49 @@ const char* keyboard[] = {
 int keyboardSize = 28;
 
 int cursorIndex = 0;
+
+// --- ENCODING ---
+String encodeURL(String str) {
+  String encoded = "";
+  char c;
+  char code0;
+  char code1;
+
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+
+    if (isalnum(c)) {
+      encoded += c;
+    } else {
+      code1 = (c & 0xf) + '0';
+      if ((c & 0xf) > 9) code1 = (c & 0xf) - 10 + 'A';
+      c = (c >> 4) & 0xf;
+      code0 = c + '0';
+      if (c > 9) code0 = c - 10 + 'A';
+      encoded += '%';
+      encoded += code0;
+      encoded += code1;
+    }
+  }
+  return encoded;
+}
+
+// --- SERIALIZE TASK ARRAY ---
+String serializeTasks() {
+
+  String result = "";
+
+  for (int i = 0; i < taskCount; i++) {
+    result += taskBuffer[i];
+    if (i < taskCount - 1) result += "|";
+  }
+
+  return result;
+}
+
+
+
+
 
 // --- HJÆLPEFUNKTIONER TIL UI ---
 void drawHeader(const char* title) {
@@ -76,11 +145,45 @@ void showFocusMode() {
   drawButtons("Change", "Start", NULL);
 }
 
+void createNewList(String listName) {
+  if(todoListCount < MAX_LISTS) {
+    todoLists[todoListCount].name = listName;
+    todoLists[todoListCount].taskCount = 0;
+    todoListCount++;
+  }
+}
+
+void addTaskToList(int listIndex, String taskName) {
+  if(listIndex < todoListCount) {
+    TodoList &list = todoLists[listIndex];
+    if(list.taskCount < MAX_TASKS) {
+      list.tasks[list.taskCount].name = taskName;
+      list.tasks[list.taskCount].completed = false;
+      list.taskCount++;
+    }
+  }
+}
+
+void removeTaskFromList(int listIndex, int taskIndex) {
+  if(listIndex < todoListCount) {
+    TodoList &list = todoLists[listIndex];
+    if(taskIndex >= 0 && taskIndex < list.taskCount) {
+      for(int i = taskIndex; i < list.taskCount - 1; i++) {
+        list.tasks[i] = list.tasks[i + 1];
+      }
+      list.taskCount--;
+    }
+  }
+}
+
 void showTODOMenu() {
   drawHeader("TODO-List");
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(60, 100);
-  drawButtons("New", "Open", NULL);
+
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(40, 80);
+  M5.Lcd.printf("Tasks: %d", taskCount);
+
+  drawButtons("New", "Send All", NULL);
 }
 
 void showSelectList() {
@@ -91,11 +194,17 @@ void showSelectList() {
 }
 
 void showListMenu() {
-  drawHeader(selectedTodoList);
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(60, 100);
-  drawButtons("Change", "Select", "Mark as done");
-
+  drawHeader(todoLists[selectedListIndex].name.c_str());
+  M5.Lcd.setTextSize(2);
+  
+  for(int i=0; i<todoLists[selectedListIndex].taskCount; i++){
+    M5.Lcd.setCursor(20, 60 + i*20);
+    M5.Lcd.printf("%d. %s %s", i+1, 
+        todoLists[selectedListIndex].tasks[i].name.c_str(),
+        todoLists[selectedListIndex].tasks[i].completed ? "[X]" : "[ ]");
+  }
+  
+  drawButtons("New Task", "Delete Task", "Send All");
 }
 
 void showUserInput() {
@@ -162,7 +271,7 @@ void updateTimerUI() {
     focusScore = 100 - (10 * distractions);
     if (focusScore < 0) focusScore = 0;
 
-    sendToGoogleSheets(durationStr, distractions, focusScore);
+    sendFocusToServer(durationStr, distractions, focusScore);
 
     currentState = EVALUATION;
     showEvaluation();
@@ -275,16 +384,25 @@ void loop() {
   break;
 
     case TODO_LIST:
-   
-    if (M5.BtnA.wasPressed()) {
-      inputText = "";
-      cursorIndex = 0;
-      currentState = USER_INPUT;
-      showUserInput();
-    }
-    if (M5.BtnB.wasPressed()) { 
-      currentState = LIST_MENU; 
-    }
+
+      // NEW TASK
+      if (M5.BtnA.wasPressed()) {
+        inputText = "";
+        cursorIndex = 0;
+        currentState = USER_INPUT;
+        showUserInput();
+      }
+
+      // SEND ALL TASKS
+      if (M5.BtnB.wasPressed()) {
+
+        if (taskCount > 0) {
+          sendAllListsToServer();
+          taskCount = 0;
+        }
+
+        showTODOMenu();
+      }
 
     break;
 
@@ -331,18 +449,21 @@ void loop() {
     if (M5.BtnB.wasPressed()) showMenu();
     break;
 
-    case CONFIRM:
+  case CONFIRM:
 
     if (M5.BtnA.wasPressed()) {
-      // send til Google Sheets
-      sendTodoToGoogleSheets(selectedTodoList, inputText);
 
-      inputText = ""; // reset input
+      if (taskCount < MAX_TASKS) {
+        taskBuffer[taskCount] = inputText;
+        taskCount++;
+      }
+
+      inputText = "";
+      currentState = TODO_LIST;
       showTODOMenu();
     }
 
     if (M5.BtnB.wasPressed()) {
-      // tilbage
       currentState = USER_INPUT;
       showUserInput();
     }
@@ -351,42 +472,123 @@ void loop() {
   }
 }
 
-// ---------------- GOOGLE LOGGING ----------------
-void sendToGoogleSheets(String duration, int distractions, int score) {
+// ---------------- HANDLE JSON ----------------
+String buildTasksJSON() {
+  String json = "[";
 
-  if (WiFi.status() == WL_CONNECTED) {
+  for (int i = 0; i < taskCount; i++) {
+    json += "{";
+    json += "\"tasknum\":" + String(i + 1) + ",";
+    json += "\"completed\":false";
+    json += "}";
 
-    HTTPClient http;
-
-    String url = focusModeScriptURL;
-    url += "?duration=" + duration;
-    url += "&distractions=" + String(distractions);
-    url += "&score=" + String(score);
-
-    Serial.println(url);
-
-    http.begin(url);
-    http.GET();
-    http.end();
+    if (i < taskCount - 1) json += ",";
   }
+
+  json += "]";
+  return json;
 }
 
-void sendTodoToGoogleSheets(String list, String task) {
 
-  if (WiFi.status() == WL_CONNECTED) {
+// ---------------- FOCUS SERVER POST REQ ----------------
+void sendFocusToServer(String duration, int distractions, int score) {
 
-    HTTPClient http;
+  if (WiFi.status() != WL_CONNECTED) return;
 
-    task.replace(" ", "%20");
+  WiFiClientSecure client;
+  client.setInsecure();
 
-    String url = todoListScriptURL;
-    url += "?list=" + list;
-    url += "&task=" + task;
+  HTTPClient http;
 
-    Serial.println(url);
+  String url = String(serverURL) + "/focus";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
 
-    http.begin(url);
-    http.GET();
-    http.end();
+  String json = "{";
+  json += "\"duration\":\"" + duration + "\",";
+  json += "\"distractions\":" + String(distractions) + ",";
+  json += "\"score\":" + String(score) + ",";
+  json += "\"device\":\"M5Stack\"";
+  json += "}";
+
+  Serial.println("Sending JSON:");
+  Serial.println(json);
+
+  int httpResponseCode = http.POST(json);
+
+  Serial.print("Focus response: ");
+  Serial.println(httpResponseCode);
+
+  http.end();
+}
+/*
+// ---------------- TODO SERVER POST REQ ----------------
+void sendTodoToServer() {
+
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+
+  String url = String(serverURL) + "/todolist";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+
+  String json = "{";
+  json += "\"tasks\":" + buildTasksJSON();
+  json += "}";
+
+  Serial.println("Sending JSON:");
+  Serial.println(json);
+
+  int httpResponseCode = http.POST(json);
+
+  Serial.print("Todo response: ");
+  Serial.println(httpResponseCode);
+
+  http.end();
+}
+*/
+String buildAllListsJSON() {
+  String json = "[";
+  for(int l = 0; l < todoListCount; l++){
+    json += "{";
+    json += "\"todolist_id\":" + String(l + 1) + ",";
+    json += "\"tasks\":[";
+    for(int t = 0; t < todoLists[l].taskCount; t++){
+      json += "{";
+      json += "\"tasknum\":" + String(t + 1) + ",";
+      json += String("\"completed\":") + (todoLists[l].tasks[t].completed ? "true" : "false");
+      json += "}";
+      if(t < todoLists[l].taskCount - 1) json += ",";
+    }
+    json += "]}";
+    if(l < todoListCount - 1) json += ",";
   }
+  json += "]";
+  return json;
+}
+
+void sendAllListsToServer() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  String url = String(serverURL) + "/todolist";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+
+  String json = buildAllListsJSON();
+  Serial.println("Sending JSON:");
+  Serial.println(json);
+
+  int httpResponseCode = http.POST(json);
+  Serial.print("Todo response: ");
+  Serial.println(httpResponseCode);
+
+  http.end();
 }
