@@ -179,6 +179,31 @@ void showSelectList() {
   drawButtons("Up", "Down", "Select");
 }
 
+void showEditTasksMenu() {
+    drawHeader("Edit Tasks");
+    M5.Lcd.setTextSize(2);
+
+    M5.Lcd.setCursor(40, 80);
+    M5.Lcd.println("Manage tasks for:");
+    M5.Lcd.setCursor(40, 110);
+    M5.Lcd.println(todoLists[selectedListIndex].name);
+
+    drawButtons("New Task", "Delete Task", "Back");
+}
+
+void showSelectTaskToDeleteMenu() {
+    drawHeader("Select Task to Delete");
+    M5.Lcd.setTextSize(2);
+
+    for(int i = 0; i < todoLists[selectedListIndex].taskCount; i++){
+        M5.Lcd.setCursor(20, 60 + i*20);
+        M5.Lcd.setTextColor(i == selectedTaskIndex ? RED : WHITE);
+        M5.Lcd.printf("%d. %s", i+1, todoLists[selectedListIndex].tasks[i].name.c_str());
+    }
+
+    drawButtons("Up", "Down", "Delete");
+}
+
 /*void showListMenu() {
   drawHeader(todoLists[selectedListIndex].name.c_str());
   M5.Lcd.setTextSize(2);
@@ -411,29 +436,32 @@ void loop() {
 
   case CONFIRM:
     if (M5.BtnA.wasPressed()) {
-      // Confirm input
-      if (nextStateAfterInput == LIST_MENU_CREATE) {
-        createNewListFromInput(inputText);
-      } 
-      else if (nextStateAfterInput == EDIT_TASK) {
-        todoLists[selectedListIndex].tasks[selectedTaskIndex].name = inputText;
-      }
+        if (nextStateAfterInput == LIST_MENU_CREATE) {
+            createNewListFromInput(inputText);
+        } 
+        else if (nextStateAfterInput == EDIT_TASK) {
+            // Add task to currently selected list
+            addTaskToList(selectedListIndex, inputText);
+        }
 
-      // Reset temporary input state
-      inputText = "";
-      nextStateAfterInput = NONE;
+        inputText = "";
+        nextStateAfterInput = NONE;
 
-      // Return to list menu
-      showTODOListsMenu();
-      currentState = LIST_MENU;
+        // Return to appropriate menu
+        if(currentState == USER_INPUT) { 
+            // Came from task edit
+            showEditTasksMenu();
+            currentState = EDIT_TASKS_MENU;
+        } else {
+            showTODOListsMenu();
+            currentState = LIST_MENU;
+        }
     }
-
     if (M5.BtnB.wasPressed()) {
-      // Cancel → return to input editing
-      currentState = USER_INPUT;
-      showUserInput();
+        currentState = USER_INPUT;
+        showUserInput();
     }
-  break;
+    break;
 
     case FOCUS_MODE:
     if (M5.BtnA.wasPressed()) { 
@@ -522,10 +550,9 @@ void loop() {
 
     case OPEN_LIST:
         if(M5.BtnA.wasPressed()) {
-            // Edit task → copy name to inputText and open USER_INPUT
-            inputText = todoLists[selectedListIndex].tasks[selectedTaskIndex].name;
-            currentState = USER_INPUT;
-            nextStateAfterInput = EDIT_TASK;
+            // Edit tasks → go to task management menu
+            currentState = EDIT_TASKS_MENU;
+            showEditTasksMenu();
         }
         if(M5.BtnB.wasPressed()) {
             // Toggle completed
@@ -534,6 +561,44 @@ void loop() {
             showListTasksMenu();
         }
         if(M5.BtnC.wasPressed()) showTODOListsMenu();
+        break;
+    case EDIT_TASKS_MENU:
+        if(M5.BtnA.wasPressed()) {
+            // New task → keyboard input
+            inputText = "";
+            cursorIndex = 0;
+            currentState = USER_INPUT;
+            nextStateAfterInput = EDIT_TASK; // will add new task
+            showUserInput();
+        }
+        if(M5.BtnB.wasPressed()) {
+            // Delete task → select which task to delete
+            if(todoLists[selectedListIndex].taskCount > 0){
+                selectedTaskIndex = 0;
+                currentState = SELECT_TASK_TO_DELETE;
+                showSelectTaskToDeleteMenu();
+            }
+        }
+        if(M5.BtnC.wasPressed()) {
+            // Back to OPEN_LIST view
+            showListTasksMenu();
+            currentState = OPEN_LIST;
+        }
+        break;
+    case SELECT_TASK_TO_DELETE:
+        if(M5.BtnA.wasPressed()) { // Up
+            selectedTaskIndex = max(0, selectedTaskIndex-1);
+            showSelectTaskToDeleteMenu();
+        }
+        if(M5.BtnB.wasPressed()) { // Down
+            selectedTaskIndex = min(todoLists[selectedListIndex].taskCount-1, selectedTaskIndex+1);
+            showSelectTaskToDeleteMenu();
+        }
+        if(M5.BtnC.wasPressed()) { // Delete selected task
+            removeTaskFromList(selectedListIndex, selectedTaskIndex);
+            currentState = EDIT_TASKS_MENU;
+            showEditTasksMenu();
+        }
         break;
   }
 }
