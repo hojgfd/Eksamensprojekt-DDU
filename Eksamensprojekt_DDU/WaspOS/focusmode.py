@@ -4,12 +4,15 @@ import wasp
 import fonts
 import widgets
 import time
+import json
 from micropython import const
 
 # Pages
 _HOME = const(0)
 _RUNNING = const(1)
 _RESULT = const(2)
+SESSION_KEY = "focus_session_v1"
+SESSION_FILE = "focus_session.json"
 
 
 # Durations (minutes)
@@ -30,6 +33,62 @@ class FocusmodeApp:
         self.distractions = 0
         self.running = False
 
+
+    # ---------------- Storage -----------------
+    def _store(self):
+        return getattr(wasp.system, "persistent", None)
+        
+    def _delete_session(self):
+        try:
+            import uos
+            uos.remove(SESSION_FILE)
+        except:
+            pass
+
+    def _restore_session(self):
+        import time
+
+        try:
+            with open(SESSION_FILE, "r") as f:
+                data = json.loads(f.read())
+        except:
+            return
+
+        self.total = data["total"]
+        self.distractions = data.get("distractions", 0)
+
+        elapsed = int(time.time() - data["start"])
+        self.remaining = self.total - elapsed
+
+        if self.remaining <= 0:
+            self.remaining = 0
+            self.page = _RESULT
+            self.running = False
+            self._delete_session()
+        else:
+            self.page = _RUNNING
+            self.running = True
+
+    def _save_session(self, data):
+        try:
+            with open(SESSION_FILE, "w") as f:
+                f.write(json.dumps(data))
+        except:
+            pass
+
+    def _update_session(self):
+        import time
+
+        try:
+            with open(SESSION_FILE, "r") as f:
+                data = json.loads(f.read())
+
+            data["distractions"] = self.distractions
+
+            with open(SESSION_FILE, "w") as f:
+                f.write(json.dumps(data))
+        except:
+            pass
     # ---------------- Lifecycle ----------------
 
     def foreground(self):
@@ -44,6 +103,7 @@ class FocusmodeApp:
             wasp.EventMask.BUTTON
         )
         wasp.system.request_tick(1000)
+        self._restore_session()
 
     def background(self):
         self.running = False
@@ -83,6 +143,13 @@ class FocusmodeApp:
         elif self.page == _RUNNING:
             if self.distraction_btn.touch(event):
                 self.distractions += 1
+                '''store = self._store()
+                if store:
+                    data = store.get(SESSION_KEY)
+                    if data:
+                        data["distractions"] = self.distractions
+                        store.set(SESSION_KEY, data)'''
+                self._update_session()
                 self._draw()
                 return
 
@@ -93,15 +160,29 @@ class FocusmodeApp:
     # ---------------- Session control ----------------
 
     def _start_session(self):
+        import time
+
         self.total = _DURATIONS[self.duration_idx] * 60
         self.remaining = self.total
         self.distractions = 0
         self.running = True
         self.page = _RUNNING
 
+        now = time.time()
+
+        self._save_session({
+            "start": now,
+            "total": self.total,
+            "distractions": 0
+        })
+
     def _finish_session(self):
         self.running = False
         self.page = _RESULT
+
+        store = self._store()
+        if store:
+            store.delete(SESSION_KEY)
 
     def _reset(self):
         self.page = _HOME
@@ -159,6 +240,7 @@ class FocusmodeApp:
         self.start_btn.draw()
 
     def _draw_running(self, draw):
+        
         minutes = self.remaining // 60
         seconds = self.remaining % 60
 
