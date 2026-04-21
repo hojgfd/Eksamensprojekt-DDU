@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-
 import wasp
 import widgets
 import fonts
+import time
 from micropython import const
 
 _HOME = const(-1)
@@ -10,9 +10,9 @@ _EDIT_LIST = const(-2)
 _INPUT = const(-3)
 
 KEY_X = 0
-KEY_Y = 60
-KEY_W = 40
-KEY_H = 36
+KEY_Y = 70
+KEY_W = 60
+KEY_H = 38
 
 
 class TodolistsApp:
@@ -22,14 +22,45 @@ class TodolistsApp:
         self.input_text = ""
         self.input_mode = "list"  # or "task"
         self.keys = [
-            ["A","B","C","D","E","F"],
-            ["G","H","I","J","K","L"],
-            ["M","N","O","P","Q","R"],
-            ["S","T","U","V","W","X"],
-            ["Y","Z","⌫","SPACE","OK"]
+            ["1","2","3"],
+            ["4","5","6"],
+            ["7","8","9"],
+            ["bk","0","OK"]
         ]
+
+        self.t9_map = {
+        "1": ".,!?",
+        "2": "ABC",
+        "3": "DEF",
+        "4": "GHI",
+        "5": "JKL",
+        "6": "MNO",
+        "7": "PQRS",
+        "8": "TUV",
+        "9": "WXYZ",
+        "0": " "
+    }
+
+        self.t9_labels = {
+        "1": ".,!?",
+        "2": "ABC",
+        "3": "DEF",
+        "4": "GHI",
+        "5": "JKL",
+        "6": "MNO",
+        "7": "PQRS",
+        "8": "TUV",
+        "9": "WXYZ",
+        "0": "SPACE"
+    }
+
+        self.last_key = None
+        self.last_press_time = 0
+        self.tap_index = 0
         self.page = _HOME
         self.scroll = 0
+        
+        self.t9_delay = 1500  # ms
 
         # Each todo-list = {"name": str, "tasks": [(text, done)]}
         self.lists = [
@@ -47,7 +78,8 @@ class TodolistsApp:
         self.btn_del_list = widgets.Button(120, 160, 110, 35, "Del List")
 
         self.task_checks = [widgets.Checkbox(10, 60 + i * 30) for i in range(4)]
-
+        
+        self._build_keyboard()
         self._draw()
 
         wasp.system.request_event(
@@ -61,7 +93,11 @@ class TodolistsApp:
         self._save()
 
     def tick(self, ticks):
-        pass
+        if self.last_key:
+            now = time.ticks_ms()
+            if time.ticks_diff(now, self.last_press_time) > self.t9_delay:
+                self.last_key = None
+                self._draw_keyboard()
 
     # -------------------------
     # Input handling
@@ -73,43 +109,20 @@ class TodolistsApp:
         y = KEY_Y
 
         for row in self.keys:
-            # FIRST calculate actual row width
-            total_width = 0
-            widths = []
-
-            for key in row:
-                if key == "SPACE":
-                    w = KEY_W * 2
-                elif key == "OK":
-                    w = int(KEY_W * 1.5)
-                else:
-                    w = KEY_W
-
-                widths.append(w)
-                total_width += w
-
-            # Now center correctly
-            start_x = max(0, (screen_w - total_width) // 2)
+            total_width = len(row) * KEY_W
+            start_x = (screen_w - total_width) // 2
 
             x = start_x
 
-            # Build keys
-            for i, key in enumerate(row):
-                w = widths[i]
-
-                # Clamp width if it would overflow
-                if x + w > 240:
-                    w = 240 - x
-
+            for key in row:
                 self.keymap.append({
                     "label": key,
                     "x": x,
                     "y": y,
-                    "w": w,
+                    "w": KEY_W,
                     "h": KEY_H
                 })
-
-                x += w
+                x += KEY_W
 
             y += KEY_H
 
@@ -141,8 +154,11 @@ class TodolistsApp:
         if not key:
             return
 
-        if key == "⌫":
+        now = time.ticks_ms()
+
+        if key == "bk":
             self.input_text = self.input_text[:-1]
+            self.last_key = None
 
         elif key == "OK":
             if self.input_mode == "list":
@@ -156,11 +172,19 @@ class TodolistsApp:
             self._draw()
             return
 
-        elif key == "SPACE":
-            self.input_text += " "
+        elif key in self.t9_map:
+            letters = self.t9_map[key]
 
-        else:
-            self.input_text += key
+            # Hvis samme knap klikkes hurtigt cykl bogstaver
+            if key == self.last_key and time.ticks_diff(now, self.last_press_time) < self.t9_delay:
+                self.tap_index = (self.tap_index + 1) % len(letters)
+                self.input_text = self.input_text[:-1] + letters[self.tap_index]
+            else:
+                self.tap_index = 0
+                self.input_text += letters[self.tap_index]
+
+            self.last_key = key
+            self.last_press_time = now
 
         self._draw()
 
@@ -177,9 +201,9 @@ class TodolistsApp:
             self._draw()
             return
 
-        if self.btn_del_list.touch((0, x, y)):
+        '''if self.btn_del_list.touch((0, x, y)):
             self._delete_list()
-            return
+            return'''
 
         # select list
         for i in range(len(self.lists)):
@@ -210,7 +234,7 @@ class TodolistsApp:
                 self._draw()
                 return
 
-        # NEW TASK → input screen
+        # NEW TASK
         if self.btn_add_task.touch((0, x, y)):
             self.input_text = ""
             self.input_index = 0
@@ -266,6 +290,51 @@ class TodolistsApp:
         else:
             self._draw_tasks()
 
+    def _draw_input_text(self):
+        draw = wasp.watch.drawable
+
+        draw.fill(0x0000, 0, 40, 240, 30)
+
+        draw.set_font(fonts.sans24)
+
+        text = self.input_text
+        if len(text) > 12:
+            text = text[-12:]
+
+        draw.string(text + "_", 10, 50, width=220)
+
+    def _draw_keyboard(self):
+        draw = wasp.watch.drawable
+
+        for key in self.keymap:
+            label = key["label"]
+            x = key["x"]
+            y = key["y"]
+            w = key["w"]
+            h = key["h"]
+
+            w = min(w, 240 - x)
+            h = min(h, 240 - y)
+            if w <= 0 or h <= 0:
+                continue
+
+            color = 0x07E0 if label == self.last_key else 0x39E7
+
+            draw.fill(color, x, y, w, h)
+
+            draw.fill(0x0000, x, y, w, 1)
+            draw.fill(0x0000, x, y+h-1, w, 1)
+            draw.fill(0x0000, x, y, 1, h)
+            draw.fill(0x0000, x+w-1, y, 1, h)
+
+            draw.set_font(fonts.sans24)
+            draw.string(label, x + w//2 - 8, y + 2)
+
+            if label in self.t9_labels:
+                draw.set_font(fonts.sans18)
+                small = self.t9_labels[label]
+                draw.string(small, x + w//2 - (len(small)*6), y + h - 16)
+
     def _draw_home(self):
         draw = wasp.watch.drawable
         draw.set_font(fonts.sans24)
@@ -276,7 +345,6 @@ class TodolistsApp:
             draw.string(lst["name"], 10, 50 + i * 30, width=220)
 
         self.btn_add_list.draw()
-        self.btn_del_list.draw()
 
     def _draw_tasks(self):
         draw = wasp.watch.drawable
@@ -303,7 +371,6 @@ class TodolistsApp:
         self.btn_del_list.draw()
         
     def _draw_input(self):
-        self.input_text = str(self.input_text)
         draw = wasp.watch.drawable
         draw.fill()
         self._draw_bar()
@@ -311,37 +378,22 @@ class TodolistsApp:
         draw.set_font(fonts.sans24)
         draw.string("Enter Name", 0, 10, width=240)
 
-        draw.set_font(fonts.sans24)
-        draw.string(self.input_text, 10, 50, width=220)
+        # keyboard (kun fuld redraw når vi går ind i input)
+        self._draw_keyboard()
 
-        draw.set_font(fonts.sans18)
+        # tekstfelt
+        self._draw_input_text()
 
-        for key in self.keymap:
-            label = key["label"]
-            x = key["x"]
-            y = key["y"]
-            w = key["w"]
-            h = key["h"]
-
-            # center text inside key
-            tx = x + w // 2 - 8
-            ty = y + h // 2 - 8
-            if 0 <= tx <= 240 and 0 <= ty <= 240:
-                if label == "SPACE":
-                    draw.string("_", tx, ty)
-                else:
-                    draw.string(label, tx, ty)
-
-        #draw.set_font(fonts.sans18)
-        #draw.string("Tap letters • OK", 0, 185, width=240)
 
     def _draw_bar(self):
         sbar = wasp.system.bar
         sbar.clock = True
         sbar.draw()
 
+
+
     # -------------------------
-    # Persistence (optional simple)
+    # Saving
     # -------------------------
     def _save(self):
         try:
