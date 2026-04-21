@@ -89,8 +89,6 @@ class TodolistsApp:
 
         self._build_keyboard()
 
-    def background(self):
-        self._save()
 
     def tick(self, ticks):
         if self.last_key:
@@ -389,19 +387,3 @@ class TodolistsApp:
         sbar = wasp.system.bar
         sbar.clock = True
         sbar.draw()
-
-
-
-    # -------------------------
-    # Saving
-    # -------------------------
-    def _save(self):
-        try:
-            with open("todo.txt", "w") as f:
-                for lst in self.lists:
-                    f.write(lst["name"] + "|")
-                    for task, done in lst["tasks"]:
-                        f.write(f"{task},{int(done)};")
-                    f.write("\n")
-        except:
-            pass
