@@ -12,10 +12,25 @@
 import wasp
 import fonts
 import widgets
-import time
+
+try:
+    import utime as time
+    ON_DEVICE = True
+except ImportError:
+    import time
+    ON_DEVICE = False
+
 import json
 import math
 from micropython import const
+
+if ON_DEVICE:
+    try:
+        import ppg
+    except:
+        ppg = None
+else:
+    ppg = None
 
 _HOME = const(0)
 _RECORDING = const(1)
@@ -27,15 +42,20 @@ DATA_FILE = "hr_data.jsonl"
 _INTERVALS = (1, 2, 5)
 _DURATIONS = (1, 5, 10)   # minutes
 
-DEMO_MODE = True
+DEMO_MODE = False
 
 
-class HeartLoggerApp:
+class HeartratesaverApp:
     """Log heart-rate samples to the watch filesystem."""
 
     NAME = "HR Log"
 
     def __init__(self):
+        self._demo_step = 0
+        self._ppg = None
+        self._subsample_phase = 0
+        self._ppg = None
+        self._raw_count = 0
         self.page = _HOME
         self.running = False
 
@@ -49,7 +69,43 @@ class HeartLoggerApp:
         self.status_text = "Ready"
 
         self._demo_step = 0
+    
+    def _sample_sensor_device(self):
+        try:
+            raw = wasp.watch.hrs.read_hrs()
+            self._ppg.preprocess(raw)
+            hr = self._ppg.get_heart_rate()
+            return hr
+        except:
+            return None
+    
+    def _sample_bpm(self):
+        if DEMO_MODE:
+            self._demo_step += 1
+            return 74 + int(8 * math.sin(self._demo_step / 2.5)) + (self._demo_step % 3)
 
+        if not self._ppg:
+            return None
+
+        try:
+            raw = wasp.watch.hrs.read_hrs()
+            self._ppg.preprocess(raw)
+            return self._ppg.get_heart_rate()
+        except:
+            return None
+
+
+    def _now(self):
+            try:
+                return int(time.time())
+            except:
+                pass
+
+            try:
+                return int(time.ticks_ms() // 1000)
+            except:
+                pass
+            return 0
     # ---------------- Lifecycle ----------------
 
     def foreground(self):
@@ -69,6 +125,12 @@ class HeartLoggerApp:
         wasp.system.request_tick(1000)
 
     def background(self):
+        try:
+            if not self.running:
+                wasp.watch.hrs.disable()
+        except:
+            pass
+
         self.interval_btn = None
         self.duration_btn = None
         self.start_btn = None
@@ -79,34 +141,42 @@ class HeartLoggerApp:
         wasp.system.navigate(wasp.EventType.HOME)
 
     def tick(self, ticks):
-        if self.page == _RECORDING and self.running:
-            if self.remaining > 0:
-                self.remaining -= 1
+        if self.page != _RECORDING or not self.running:
+            return
 
-                interval = _INTERVALS[self.interval_idx]
-                elapsed = self.total - self.remaining
+        if self.remaining <= 0:
+            self._finish_session()
+            self._draw()
+            return
 
-                if elapsed > 0 and (elapsed % interval) == 0:
-                    bpm = self._read_heart_rate()
-                    if bpm is not None:
-                        self.last_bpm = bpm
-                        self.sample_count += 1
-                        self.status_text = "Saved"
+        self.remaining -= 1
 
-                        self._append_measurement({
-                            "t": int(time.time()),
-                            "bpm": int(bpm)
-                        })
-                        self._update_session()
-                    else:
-                        self.status_text = "No sensor"
+        # Hold uret vågent mens optagelse kører
+        wasp.system.keep_awake()
 
-                self._draw()
-            else:
-                self._finish_session()
-                self._draw()
+        # Tag én let prøve pr. tick i simulatoren
+        # og én rå PPG-prøve pr. tick på device
+        bpm = self._sample_bpm()
+        if bpm is not None:
+            self.last_bpm = int(bpm)
 
-    # ---------------- Input ----------------
+        interval = _INTERVALS[self.interval_idx]
+        elapsed = self.total - self.remaining
+
+        # Gem kun hver valgt interval
+        if elapsed > 0 and (elapsed % interval) == 0 and self.last_bpm > 0:
+            self.sample_count += 1
+            self.status_text = "Saved"
+
+            self._append_measurement({
+                "t": self._now(),
+                "bpm": self.last_bpm
+            })
+            self._update_session()
+        elif self.last_bpm == 0:
+            self.status_text = "Measuring"
+
+        self._draw()    # ---------------- Input ----------------
 
     def touch(self, event):
         if self.page == _HOME:
@@ -144,24 +214,46 @@ class HeartLoggerApp:
     # ---------------- Session control ----------------
 
     def _start_session(self):
-        self.total = _DURATIONS[self.duration_idx] * 60
-        self.remaining = self.total
-        self.sample_count = 0
-        self.last_bpm = 0
-        self.running = True
-        self.page = _RECORDING
-        self.status_text = "Recording"
-        self._demo_step = 0
+            now = self._now()
+            self.total = _DURATIONS[self.duration_idx] * 60
+            self.remaining = self.total
+            self.sample_count = 0
+            self.last_bpm = 0
+            self.running = True
+            self.page = _RECORDING
+            self.status_text = "Recording"
+            self._demo_step = 0
+            self._subsample_phase = 0
+            self._ppg = None
 
-        self._save_session({
-            "start": int(time.time()),
-            "total": self.total,
-            "sample_count": 0,
-            "interval_idx": self.interval_idx,
-            "duration_idx": self.duration_idx
+            if not DEMO_MODE:
+                try:
+                    wasp.watch.hrs.enable()
+
+                    if ppg:
+                        first = wasp.watch.hrs.read_hrs()
+                        self._ppg = ppg.PPG(first)
+                except:
+                    self.status_text = "Sensor error"
+                    self.running = False
+                    self.page = _HOME
+                    return
+
+            self._save_session({
+                "start": now,
+                "total": self.total,
+                "sample_count": 0,
+                "interval_idx": self.interval_idx,
+                "duration_idx": self.duration_idx
         })
 
     def _finish_session(self):
+        try:
+            wasp.watch.hrs.disable()
+        except:
+            pass
+
+        self._ppg = None
         self.running = False
         self.page = _RESULT
         self.status_text = "Done"
@@ -197,7 +289,7 @@ class HeartLoggerApp:
         self.interval_idx = data.get("interval_idx", 1)
         self.duration_idx = data.get("duration_idx", 1)
 
-        elapsed = int(time.time() - data["start"])
+        elapsed = self._now() - data["start"]
         self.remaining = self.total - elapsed
 
         if self.remaining <= 0:
@@ -213,7 +305,7 @@ class HeartLoggerApp:
 
     def _update_session(self):
         self._save_session({
-            "start": int(time.time()) - (self.total - self.remaining),
+            "start": self._now() - (self.total - self.remaining),
             "total": self.total,
             "sample_count": self.sample_count,
             "interval_idx": self.interval_idx,
@@ -266,7 +358,7 @@ class HeartLoggerApp:
             self._demo_step += 1
             # Fake pulse curve for simulator preview
             bpm = 74 + int(8 * math.sin(self._demo_step / 2.5)) + (self._demo_step % 3)
-            return bpm
+            return bpm 
 
         try:
             # Replace this line with the exact API your wasp-os build exposes
