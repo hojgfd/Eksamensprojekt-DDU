@@ -67,6 +67,7 @@ class HeartratesaverApp:
         self.sample_count = 0
         self.last_bpm = 0
         self.status_text = "Ready"
+        self._warmup = 5
 
         self._demo_step = 0
     
@@ -79,18 +80,18 @@ class HeartratesaverApp:
         except:
             return None
     
-    def _sample_bpm(self):
-        if DEMO_MODE:
-            self._demo_step += 1
-            return 74 + int(8 * math.sin(self._demo_step / 2.5)) + (self._demo_step % 3)
-
+    def _update_ppg(self):
         if not self._ppg:
             return None
 
         try:
             raw = wasp.watch.hrs.read_hrs()
-            self._ppg.preprocess(raw)
-            return self._ppg.get_heart_rate()
+            spl = self._ppg.preprocess(raw)
+
+            # først når buffer er “varm”, får du stabil HR
+            if len(self._ppg.data) > 50:
+                return self._ppg.get_heart_rate()
+
         except:
             return None
 
@@ -122,7 +123,7 @@ class HeartratesaverApp:
             wasp.EventMask.TOUCH |
             wasp.EventMask.BUTTON
         )
-        wasp.system.request_tick(1000)
+        wasp.system.request_tick(1000 // 8)
 
     def background(self):
         try:
@@ -156,7 +157,7 @@ class HeartratesaverApp:
 
         # Tag én let prøve pr. tick i simulatoren
         # og én rå PPG-prøve pr. tick på device
-        bpm = self._sample_bpm()
+        bpm = self._update_ppg()
         if bpm is not None:
             self.last_bpm = int(bpm)
 
@@ -227,17 +228,12 @@ class HeartratesaverApp:
             self._ppg = None
 
             if not DEMO_MODE:
-                try:
-                    wasp.watch.hrs.enable()
-
-                    if ppg:
+                if ppg:
+                    try:
                         first = wasp.watch.hrs.read_hrs()
                         self._ppg = ppg.PPG(first)
-                except:
-                    self.status_text = "Sensor error"
-                    self.running = False
-                    self.page = _HOME
-                    return
+                    except:
+                        self._ppg = None
 
             self._save_session({
                 "start": now,
