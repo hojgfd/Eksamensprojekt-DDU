@@ -3,7 +3,12 @@
 import wasp
 import fonts
 import widgets
-import time
+try:
+    import utime as time
+    ON_DEVICE = True
+except ImportError:
+    import time
+    ON_DEVICE = False
 import json
 from micropython import const
 
@@ -46,7 +51,6 @@ class FocusmodeApp:
             pass
 
     def _restore_session(self):
-        import time
 
         try:
             with open(SESSION_FILE, "r") as f:
@@ -77,7 +81,6 @@ class FocusmodeApp:
             pass
 
     def _update_session(self):
-        import time
 
         try:
             with open(SESSION_FILE, "r") as f:
@@ -160,7 +163,6 @@ class FocusmodeApp:
     # ---------------- Session control ----------------
 
     def _start_session(self):
-        import time
 
         self.total = _DURATIONS[self.duration_idx] * 60
         self.remaining = self.total
