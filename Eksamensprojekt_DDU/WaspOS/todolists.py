@@ -11,8 +11,8 @@ _INPUT = const(-3)
 
 KEY_X = 0
 KEY_Y = 70
-KEY_W = 60
-KEY_H = 38
+KEY_W = 70
+KEY_H = 35
 
 
 class TodolistsApp:
@@ -25,7 +25,8 @@ class TodolistsApp:
             ["1","2","3"],
             ["4","5","6"],
             ["7","8","9"],
-            ["bk","0","OK"]
+            ["BK","0","TYPE"],
+            ["OK"]
         ]
 
         self.t9_map = {
@@ -54,13 +55,13 @@ class TodolistsApp:
         "0": "SPACE"
     }
 
-        self.last_key = None
-        self.last_press_time = 0
-        self.tap_index = 0
+
         self.page = _HOME
         self.scroll = 0
         
-        self.t9_delay = 1500  # ms
+
+        self.pending_key = None
+        self.pending_index = 0
 
         # Each todo-list = {"name": str, "tasks": [(text, done)]}
         self.lists = [
@@ -72,8 +73,8 @@ class TodolistsApp:
     # Lifecycle
     # -------------------------
     def foreground(self):
-        self.btn_add_list = widgets.Button(10, 200, 100, 35, "New List")
-        self.btn_add_task = widgets.Button(120, 200, 110, 35, "New Task")
+        self.btn_add_list = widgets.Button(10, 200, 100, 35, "New")
+        self.btn_add_task = widgets.Button(120, 200, 110, 35, "Add")
         self.btn_ok = widgets.Button(70, 200, 100, 35, "OK")
         self.btn_del_list = widgets.Button(120, 160, 110, 35, "Del List")
 
@@ -88,14 +89,6 @@ class TodolistsApp:
         )
 
         self._build_keyboard()
-
-
-    def tick(self, ticks):
-        if self.last_key:
-            now = time.ticks_ms()
-            if time.ticks_diff(now, self.last_press_time) > self.t9_delay:
-                self.last_key = None
-                self._draw_keyboard()
 
     # -------------------------
     # Input handling
@@ -147,16 +140,23 @@ class TodolistsApp:
     def press(self, button, state):
         wasp.system.navigate(wasp.EventType.HOME)
 
+
     def _handle_input_touch(self, x, y):
         key = self._get_key_at(x, y)
         if not key:
             return
 
-        now = time.ticks_ms()
-
         if key == "bk":
-            self.input_text = self.input_text[:-1]
-            self.last_key = None
+            if self.pending_key:
+                self.pending_key = None
+            else:
+                self.input_text = self.input_text[:-1]
+
+        elif key == "TYPE":
+            if self.pending_key:
+                letter = self.t9_map[self.pending_key][self.pending_index]
+                self.input_text += letter
+                self.pending_key = None
 
         elif key == "OK":
             if self.input_mode == "list":
@@ -173,16 +173,11 @@ class TodolistsApp:
         elif key in self.t9_map:
             letters = self.t9_map[key]
 
-            # Hvis samme knap klikkes hurtigt cykl bogstaver
-            if key == self.last_key and time.ticks_diff(now, self.last_press_time) < self.t9_delay:
-                self.tap_index = (self.tap_index + 1) % len(letters)
-                self.input_text = self.input_text[:-1] + letters[self.tap_index]
+            if key == self.pending_key:
+                self.pending_index = (self.pending_index + 1) % len(letters)
             else:
-                self.tap_index = 0
-                self.input_text += letters[self.tap_index]
-
-            self.last_key = key
-            self.last_press_time = now
+                self.pending_key = key
+                self.pending_index = 0
 
         self._draw()
 
@@ -279,7 +274,7 @@ class TodolistsApp:
     def _draw(self):
         draw = wasp.watch.drawable
         draw.fill()
-        self._draw_bar()
+        #self._draw_bar()
 
         if self.page == _INPUT:
             self._draw_input()
@@ -296,6 +291,9 @@ class TodolistsApp:
         draw.set_font(fonts.sans24)
 
         text = self.input_text
+        if self.pending_key:
+            letter = self.t9_map[self.pending_key][self.pending_index]
+            text += "[" + letter + "]"
         if len(text) > 12:
             text = text[-12:]
 
@@ -316,7 +314,8 @@ class TodolistsApp:
             if w <= 0 or h <= 0:
                 continue
 
-            color = 0x07E0 if label == self.last_key else 0x39E7
+            is_active = (label == self.pending_key)
+            color = 0x07E0 if is_active else 0x39E7
 
             draw.fill(color, x, y, w, h)
 
@@ -326,7 +325,9 @@ class TodolistsApp:
             draw.fill(0x0000, x+w-1, y, 1, h)
 
             draw.set_font(fonts.sans24)
-            draw.string(label, x + w//2 - 8, y + 2)
+
+            text_x = x + (w - len(label) * 12) // 2
+            draw.string(label, text_x, y + 2)
 
             if label in self.t9_labels:
                 draw.set_font(fonts.sans18)
@@ -362,8 +363,7 @@ class TodolistsApp:
             self.task_checks[i].state = done
             self.task_checks[i].draw()
 
-            prefix = "[x] " if done else "[ ] "
-            draw.string(prefix + text, 40, 60 + i * 30, width=200)
+            draw.string(text, 40, 65 + i * 30, width=200)
 
         self.btn_add_task.draw()
         self.btn_del_list.draw()
@@ -374,7 +374,7 @@ class TodolistsApp:
         self._draw_bar()
 
         draw.set_font(fonts.sans24)
-        draw.string("Enter Name", 0, 10, width=240)
+        #draw.string("Enter Name", 0, 4, width=240)
 
         # keyboard (kun fuld redraw når vi går ind i input)
         self._draw_keyboard()
