@@ -21,7 +21,7 @@ SESSION_FILE = "focus_session.json"
 
 
 # Durations (minutes)
-_DURATIONS = (15, 25, 35, 45)
+_DURATIONS = (1, 15, 25, 35, 45)
 
 class FocusmodeApp:
     """Pomodoro-style focus timer with distraction tracking."""
@@ -242,6 +242,8 @@ class FocusmodeApp:
         self.start_btn.draw()
 
     def _draw_running(self, draw):
+
+        wasp.system.keep_awake()
         
         minutes = self.remaining // 60
         seconds = self.remaining % 60
