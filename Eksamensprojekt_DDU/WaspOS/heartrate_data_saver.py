@@ -43,7 +43,7 @@ DATA_FILE = "hr_data.jsonl"
 _INTERVALS = (1, 2, 5)
 _DURATIONS = (1, 5, 10)   # minutes
 
-DEMO_MODE = False
+DEMO_MODE = True
 
 class HeartratesaverApp:
     """Log heart-rate samples to the watch filesystem."""
@@ -71,7 +71,7 @@ class HeartratesaverApp:
         self.total = 0
         self.remaining = 0
         self.sample_count = 0
-        self.last_bpm = 0
+        self.last_bpm = 1000
         self.status_text = "Ready"
 
         self._demo_step = 0
@@ -159,6 +159,42 @@ class HeartratesaverApp:
 
     def press(self, button, state):
         wasp.system.navigate(wasp.EventType.HOME)
+
+    def _demo_log(self, now):
+        interval = _INTERVALS[self.interval_idx]
+        elapsed = self.total - self.remaining
+
+        # simulate stable but changing heart rate
+        self.last_bpm = 60 + int(20 * math.sin(self._demo_step / 10))
+        self._demo_step += 1
+
+        if elapsed > 0 and (elapsed % interval) == 0:
+            self.sample_count += 1
+            self.status_text = "Saved (demo)"
+
+            self._append_measurement(self.last_bpm)
+
+            self._update_session()
+
+    def _sensor_log(self, now):
+        if not self._ppg_ready or self.last_bpm <= 0:
+            return
+
+        interval = _INTERVALS[self.interval_idx]
+        elapsed = self.total - self.remaining
+
+        if elapsed > 0 and (elapsed % interval) == 0:
+            self.sample_count += 1
+            self.status_text = "Saved"
+
+            self._append_measurement({
+                "t": now,
+                "bpm": self.last_bpm
+            })
+
+            self._update_session()
+
+
     def _log_stable_bpm(self):
         interval = _INTERVALS[self.interval_idx]
 
@@ -166,8 +202,8 @@ class HeartratesaverApp:
         if (self._now() % interval) != 0:
             return
 
-        if self.last_bpm <= 0:
-            return
+        #if self.last_bpm <= 0:
+        #    return
 
         self.sample_count += 1
         self.status_text = "Saved"
@@ -215,7 +251,7 @@ class HeartratesaverApp:
         if self._ppg is not None and len(self._ppg.data) >= 240:
             bpm = self._ppg.get_heart_rate()
             if bpm is not None and 30 < bpm < 220:   # sanity check
-                self.last_bpm = int(bpm)
+                self.last_bpm = 100 if DEMO_MODE else bpm
                 self._ppg_ready = True
 
         # --- 3) 1 Hz countdown and logging ---
@@ -232,16 +268,24 @@ class HeartratesaverApp:
             self._draw()
             return
 
-        if self._ppg_ready and self.last_bpm > 0:
+
+        if DEMO_MODE:
+            self._demo_log(now)
+        else:
+            self._sensor_log(now)
+
+        '''if self._ppg_ready and self.last_bpm > 0:
             interval = _INTERVALS[self.interval_idx]
             elapsed = self.total - self.remaining
-            if elapsed > 0 and (elapsed % interval) == 0:
-                self.sample_count += 1
-                self.status_text = "Saved"
-                self._append_measurement({"t": now, "bpm": self.last_bpm})
-                self._update_session()
+
+            if elapsed > 0:
+                if (elapsed % interval) == 0:
+                    self.sample_count += 1
+                    self.status_text = "Saved"
+                    self._append_measurement({"t": now, "bpm": self.last_bpm})
+                    self._update_session()
         else:
-            self.status_text = "Measuring"
+            self.status_text = "Measuring"'''
 
         self._draw()
         
@@ -282,6 +326,12 @@ class HeartratesaverApp:
     # ---------------- Session control ----------------
 
     def _start_session(self):
+        # CLEAR OLD DATA FILE
+        try:
+            f = open(DATA_FILE, "w")
+            f.close()
+        except:
+            pass
         now = self._now()
         self.total = _DURATIONS[self.duration_idx] * 60
         self.remaining = self.total
@@ -326,7 +376,7 @@ class HeartratesaverApp:
         self.total = 0
         self.remaining = 0
         self.sample_count = 0
-        self.last_bpm = 0
+        self.last_bpm = 100
         self.status_text = "Ready"
 
     # ---------------- Storage ----------------
@@ -384,10 +434,10 @@ class HeartratesaverApp:
             except:
                 pass
 
-    def _append_measurement(self, measurement):
+    def _append_measurement(self, hr):
         try:
             with open(DATA_FILE, "a") as f:
-                f.write(json.dumps(measurement) + "\n")
+                f.write('{"hr":' + str(int(hr)) + '}\n')
         except:
             self.status_text = "Write error"
 
@@ -412,24 +462,6 @@ class HeartratesaverApp:
             except:
                 pass
 
-    # ---------------- Sensor ----------------
-
-    def _read_heart_rate(self):
-        if DEMO_MODE:
-            self._demo_step += 1
-            # Fake pulse curve for simulator preview
-            bpm = 74 + int(8 * math.sin(self._demo_step / 2.5)) + (self._demo_step % 3)
-            return bpm 
-        else:
-            try:
-                # Replace this line with the exact API your wasp-os build exposes
-                bpm = wasp.watch.hrs.read_hrs()
-                if bpm and bpm > 0:
-                    return int(bpm)
-            except:
-                pass
-
-        return 600
 
     # ---------------- Drawing ----------------
 
@@ -453,7 +485,7 @@ class HeartratesaverApp:
         draw.set_font(fonts.sans18)
         draw.string("Interval: {}s".format(_INTERVALS[self.interval_idx]), 35, 55, width=170)
         draw.string("Duration: {}m".format(_DURATIONS[self.duration_idx]), 35, 75, width=170)
-        draw.string("Saved points: {}".format(saved), 35, 230 - 110, width=170)
+        #draw.string("Saved points: {}".format(saved), 35, 230 - 110, width=170)
 
         self.interval_btn.draw()
         self.duration_btn.draw()
@@ -471,7 +503,7 @@ class HeartratesaverApp:
         draw.string("{:02d}:{:02d}".format(minutes, seconds), 45, 55, width=150)
 
         draw.set_font(fonts.sans18)
-        draw.string("BPM: {}".format(self.last_bpm if self.last_bpm > 0 else "--"), 30, 110, width=180)
+        draw.string("BPM: {}".format(self.last_bpm if self.last_bpm > 0 else "None"), 30, 110, width=180)
         draw.string("Samples: {}".format(self.sample_count), 30, 135, width=180)
         draw.string("Mode: {}".format("Demo" if DEMO_MODE else "Sensor"), 30, 160, width=180)
         draw.string("Status: {}".format(self.status_text), 30, 185, width=180)
