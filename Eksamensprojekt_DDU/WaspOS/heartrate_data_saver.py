@@ -12,6 +12,7 @@
 import wasp
 import fonts
 import widgets
+import machine
 
 try:
     import utime as time
@@ -178,35 +179,51 @@ class HeartratesaverApp:
 
         self._update_session()
 
-    
+    def _subtick(self):
+        """Read one raw sample and feed it into the PPG processor."""
+        if self._ppg is None:
+            return
+        try:
+            raw = wasp.watch.hrs.read_hrs()
+            self._ppg.preprocess(raw)
+        except:
+            pass
+
     def tick(self, ticks):
         if self.page != _RECORDING or not self.running:
             return
 
-        # hold uret vågent
         wasp.system.keep_awake()
 
-        # -----------------------------
-        # 1) 8Hz PPG (hver tick)
-        # -----------------------------
-        bpm = self._update_ppg()
-        if bpm is not None:
-            self.last_bpm = int(bpm)
-            self._ppg_ready = True
+        # --- 1) Sample at 24 Hz using the same timer trick as HeartApp ---
+        t = machine.Timer(id=1, period=8000000)
+        t.start()
+        self._subtick()          # sample 1 at ~0 ms
 
-        # -----------------------------
-        # 2) 1Hz timing (rigtig tid!)
-        # -----------------------------
+        while t.time() < 41666:
+            pass
+        self._subtick()          # sample 2 at ~41 ms
+
+        while t.time() < 83332:
+            pass
+        self._subtick()          # sample 3 at ~83 ms
+
+        t.stop()
+        del t
+
+        # --- 2) Try to get a BPM reading (needs ≥240 samples, like HeartApp) ---
+        if self._ppg is not None and len(self._ppg.data) >= 240:
+            bpm = self._ppg.get_heart_rate()
+            if bpm is not None and 30 < bpm < 220:   # sanity check
+                self.last_bpm = int(bpm)
+                self._ppg_ready = True
+
+        # --- 3) 1 Hz countdown and logging ---
         now = self._now()
-
         if now == self._last_sec:
-            return  # IKKE en ny sekund endnu → stop her
-
+            return
         self._last_sec = now
 
-        # -----------------------------
-        # 3) countdown (1 Hz)
-        # -----------------------------
         if self.remaining > 0:
             self.remaining -= 1
 
@@ -215,29 +232,17 @@ class HeartratesaverApp:
             self._draw()
             return
 
-        # -----------------------------
-        # 4) logging (1 Hz + interval)
-        # -----------------------------
         if self._ppg_ready and self.last_bpm > 0:
             interval = _INTERVALS[self.interval_idx]
             elapsed = self.total - self.remaining
-
             if elapsed > 0 and (elapsed % interval) == 0:
                 self.sample_count += 1
                 self.status_text = "Saved"
-
-                self._append_measurement({
-                    "t": now,
-                    "bpm": self.last_bpm
-                })
-
+                self._append_measurement({"t": now, "bpm": self.last_bpm})
                 self._update_session()
         else:
             self.status_text = "Measuring"
 
-        # -----------------------------
-        # 5) draw (KUN 1 Hz)
-        # -----------------------------
         self._draw()
         
 
@@ -277,32 +282,30 @@ class HeartratesaverApp:
     # ---------------- Session control ----------------
 
     def _start_session(self):
-            now = self._now()
-            self.total = _DURATIONS[self.duration_idx] * 60
-            self.remaining = self.total
-            self.sample_count = 0
-            self.last_bpm = 0
-            self.running = True
-            self.page = _RECORDING
-            self.status_text = "Recording"
-            self._demo_step = 0
-            self._subsample_phase = 0
-            self._ppg = None
+        now = self._now()
+        self.total = _DURATIONS[self.duration_idx] * 60
+        self.remaining = self.total
+        self.sample_count = 0
+        self.last_bpm = 0
+        self.running = True
+        self.page = _RECORDING
+        self.status_text = "Measuring"
+        self._ppg_ready = False
+        self._demo_step = 0
 
-            if not DEMO_MODE:
-                if ppg:
-                    try:
-                        first = wasp.watch.hrs.read_hrs()
-                        self._ppg = ppg.PPG(first)
-                    except:
-                        self._ppg = None
+        if ppg:
+            try:
+                first = wasp.watch.hrs.read_hrs()   # seed value, same as HeartApp
+                self._ppg = ppg.PPG(first)
+            except:
+                self._ppg = None
 
-            self._save_session({
-                "start": now,
-                "total": self.total,
-                "sample_count": 0,
-                "interval_idx": self.interval_idx,
-                "duration_idx": self.duration_idx
+        self._save_session({
+            "start": now,
+            "total": self.total,
+            "sample_count": 0,
+            "interval_idx": self.interval_idx,
+            "duration_idx": self.duration_idx
         })
 
     def _finish_session(self):
@@ -426,7 +429,7 @@ class HeartratesaverApp:
             except:
                 pass
 
-        return None
+        return 600
 
     # ---------------- Drawing ----------------
 
@@ -468,7 +471,7 @@ class HeartratesaverApp:
         draw.string("{:02d}:{:02d}".format(minutes, seconds), 45, 55, width=150)
 
         draw.set_font(fonts.sans18)
-        draw.string("BPM: {}".format(self.last_bpm), 30, 110, width=180)
+        draw.string("BPM: {}".format(self.last_bpm if self.last_bpm > 0 else "--"), 30, 110, width=180)
         draw.string("Samples: {}".format(self.sample_count), 30, 135, width=180)
         draw.string("Mode: {}".format("Demo" if DEMO_MODE else "Sensor"), 30, 160, width=180)
         draw.string("Status: {}".format(self.status_text), 30, 185, width=180)
