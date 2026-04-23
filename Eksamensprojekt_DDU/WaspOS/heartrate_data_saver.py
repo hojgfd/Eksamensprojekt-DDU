@@ -44,13 +44,13 @@ _DURATIONS = (1, 5, 10)   # minutes
 
 DEMO_MODE = False
 
-
 class HeartratesaverApp:
     """Log heart-rate samples to the watch filesystem."""
 
     NAME = "HR Log"
 
     def __init__(self):
+        self._last_sec = self._now()
         self._demo_step = 0
         self._ppg = None
         self._subsample_phase = 0
@@ -58,18 +58,24 @@ class HeartratesaverApp:
         self._raw_count = 0
         self.page = _HOME
         self.running = False
+        self._sec_timer = 0
 
         self.interval_idx = 1
         self.duration_idx = 1
+
+        self._log_timer = 0
+        self._log_interval = 5   # sekunder (kan ændres)
+        self._ppg_ready = False
 
         self.total = 0
         self.remaining = 0
         self.sample_count = 0
         self.last_bpm = 0
         self.status_text = "Ready"
-        self._warmup = 5
 
         self._demo_step = 0
+
+        self.elapsed = self.total-self.remaining
     
     def _sample_sensor_device(self):
         try:
@@ -81,15 +87,26 @@ class HeartratesaverApp:
             return None
     
     def _update_ppg(self):
-        if not self._ppg:
-            return None
-
         try:
-            raw = wasp.watch.hrs.read_hrs()
-            spl = self._ppg.preprocess(raw)
+            # 3 samples per tick → ~24Hz
 
-            # først når buffer er “varm”, får du stabil HR
-            if len(self._ppg.data) > 50:
+            t = machine.Timer(id=1, period=8000000)
+            t.start()
+            self._ppg.preprocess(raw)
+            wasp.system.keep_awake()
+
+            while t.time() < 41666:
+                pass
+            self._ppg.preprocess(raw)
+
+            while t.time() < 83332:
+                pass
+            self._ppg.preprocess(raw)
+
+            t.stop()
+            del t
+
+            if len(self._ppg.data) > 200:
                 return self._ppg.get_heart_rate()
 
         except:
@@ -110,11 +127,12 @@ class HeartratesaverApp:
     # ---------------- Lifecycle ----------------
 
     def foreground(self):
+        wasp.watch.hrs.enable()
         self.interval_btn = widgets.Button(25, 95, 190, 35, "INTERVAL")
         self.duration_btn = widgets.Button(25, 140, 190, 35, "DURATION")
-        self.start_btn = widgets.Button(70, 190, 100, 35, "START")
-        self.stop_btn = widgets.Button(70, 190, 100, 35, "STOP")
-        self.clear_btn = widgets.Button(25, 190, 190, 35, "CLEAR DATA")
+        self.start_btn = widgets.Button(25, 190, 190, 35, "START")
+        self.stop_btn = widgets.Button(25, 190, 190, 35, "STOP")
+        #self.clear_btn = widgets.Button(25, 190, 190, 35, "CLEAR DATA")
 
         self._restore_session()
         self._draw()
@@ -136,48 +154,92 @@ class HeartratesaverApp:
         self.duration_btn = None
         self.start_btn = None
         self.stop_btn = None
-        self.clear_btn = None
+        #self.clear_btn = None
 
     def press(self, button, state):
         wasp.system.navigate(wasp.EventType.HOME)
+    def _log_stable_bpm(self):
+        interval = _INTERVALS[self.interval_idx]
 
+        # kun log hvert X sekund
+        if (self._now() % interval) != 0:
+            return
+
+        if self.last_bpm <= 0:
+            return
+
+        self.sample_count += 1
+        self.status_text = "Saved"
+
+        self._append_measurement({
+            "t": self._now(),
+            "bpm": self.last_bpm
+        })
+
+        self._update_session()
+
+    
     def tick(self, ticks):
         if self.page != _RECORDING or not self.running:
             return
+
+        # hold uret vågent
+        wasp.system.keep_awake()
+
+        # -----------------------------
+        # 1) 8Hz PPG (hver tick)
+        # -----------------------------
+        bpm = self._update_ppg()
+        if bpm is not None:
+            self.last_bpm = int(bpm)
+            self._ppg_ready = True
+
+        # -----------------------------
+        # 2) 1Hz timing (rigtig tid!)
+        # -----------------------------
+        now = self._now()
+
+        if now == self._last_sec:
+            return  # IKKE en ny sekund endnu → stop her
+
+        self._last_sec = now
+
+        # -----------------------------
+        # 3) countdown (1 Hz)
+        # -----------------------------
+        if self.remaining > 0:
+            self.remaining -= 1
 
         if self.remaining <= 0:
             self._finish_session()
             self._draw()
             return
 
-        self.remaining -= 1
+        # -----------------------------
+        # 4) logging (1 Hz + interval)
+        # -----------------------------
+        if self._ppg_ready and self.last_bpm > 0:
+            interval = _INTERVALS[self.interval_idx]
+            elapsed = self.total - self.remaining
 
-        # Hold uret vågent mens optagelse kører
-        wasp.system.keep_awake()
+            if elapsed > 0 and (elapsed % interval) == 0:
+                self.sample_count += 1
+                self.status_text = "Saved"
 
-        # Tag én let prøve pr. tick i simulatoren
-        # og én rå PPG-prøve pr. tick på device
-        bpm = self._update_ppg()
-        if bpm is not None:
-            self.last_bpm = int(bpm)
+                self._append_measurement({
+                    "t": now,
+                    "bpm": self.last_bpm
+                })
 
-        interval = _INTERVALS[self.interval_idx]
-        elapsed = self.total - self.remaining
-
-        # Gem kun hver valgt interval
-        if elapsed > 0 and (elapsed % interval) == 0 and self.last_bpm > 0:
-            self.sample_count += 1
-            self.status_text = "Saved"
-
-            self._append_measurement({
-                "t": self._now(),
-                "bpm": self.last_bpm
-            })
-            self._update_session()
-        elif self.last_bpm == 0:
+                self._update_session()
+        else:
             self.status_text = "Measuring"
 
-        self._draw()    # ---------------- Input ----------------
+        # -----------------------------
+        # 5) draw (KUN 1 Hz)
+        # -----------------------------
+        self._draw()
+        
 
     def touch(self, event):
         if self.page == _HOME:
@@ -196,11 +258,11 @@ class HeartratesaverApp:
                 self._draw()
                 return
 
-            if self.clear_btn.touch(event):
-                self._delete_measurements()
-                self.status_text = "Data cleared"
-                self._draw()
-                return
+            # if self.clear_btn.touch(event):
+            #     self._delete_measurements()
+            #     self.status_text = "Data cleared"
+            #     self._draw()
+            #     return
 
         elif self.page == _RECORDING:
             if self.stop_btn.touch(event):
@@ -285,8 +347,8 @@ class HeartratesaverApp:
         self.interval_idx = data.get("interval_idx", 1)
         self.duration_idx = data.get("duration_idx", 1)
 
-        elapsed = self._now() - data["start"]
-        self.remaining = self.total - elapsed
+        self.elapsed = self._now() - data["start"]
+        self.remaining = self.total - self.elapsed
 
         if self.remaining <= 0:
             self.remaining = 0
@@ -355,14 +417,14 @@ class HeartratesaverApp:
             # Fake pulse curve for simulator preview
             bpm = 74 + int(8 * math.sin(self._demo_step / 2.5)) + (self._demo_step % 3)
             return bpm 
-
-        try:
-            # Replace this line with the exact API your wasp-os build exposes
-            bpm = wasp.watch.hrs.read_hrs()
-            if bpm and bpm > 0:
-                return int(bpm)
-        except:
-            pass
+        else:
+            try:
+                # Replace this line with the exact API your wasp-os build exposes
+                bpm = wasp.watch.hrs.read_hrs()
+                if bpm and bpm > 0:
+                    return int(bpm)
+            except:
+                pass
 
         return None
 
@@ -393,7 +455,7 @@ class HeartratesaverApp:
         self.interval_btn.draw()
         self.duration_btn.draw()
         self.start_btn.draw()
-        self.clear_btn.draw()
+        #self.clear_btn.draw()
 
     def _draw_recording(self, draw):
         minutes = self.remaining // 60
