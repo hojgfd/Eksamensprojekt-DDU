@@ -5,16 +5,15 @@
 #include <NimBLEDevice.h>
 
 // ===== WIFI =====
-const char* ssid = "bruv"; // iot
-const char* password = "abekat38"; // mrfunkfunk
-
-const char* web_username = "oskib";
-const char* web_password = "oskib";
+const char* ssid = "bruv";
+const char* password = "abekat38";
 
 // ===== API =====
 const char* BASE = "http://192.168.89.188:5000/api";
 String token = "";
 String authHeader = "";
+
+String commandToWrite =  R"cpp(exec("for line in open('hr_data.jsonl'): print(line, end='')"))cpp";
 
 // ===== Nordic UART Service UUIDs =====
 // NUS service + RX/TX characteristics
@@ -29,9 +28,10 @@ static NimBLERemoteCharacteristic* txChar = nullptr;
 
 static bool doConnect = false;
 static bool connected = false;
+static bool firstFetch = true;
 static String replBuffer = "";
 
-// Hent filen hvert minut
+// Hent filen hvert 15. sekund
 static unsigned long lastFetchMs = 0;
 static const unsigned long FETCH_INTERVAL_MS = 60000;
 
@@ -60,7 +60,7 @@ String httpPOST(String url, String jsonBody, String auth = "") {
 }
 
 void sendHeartRate(int hr) {
-  String body = "{ \"hr\": " + String(hr) + " }";
+  String body = "{\"hr\":" + String(hr) + "}";
 
   httpPOST(
     String(BASE) + "/heartrate",
@@ -69,8 +69,9 @@ void sendHeartRate(int hr) {
   );
 }
 
+
 bool loginApi() {
-  String loginBody = "{\"username\":\"oskib\",\"password\":\"oskib\"}"; // fix 
+  String loginBody = "{\"username\":\"oskib\",\"password\":\"oskib\"}";
   String loginResponse = httpPOST(String(BASE) + "/login", loginBody);
 
   StaticJsonDocument<512> doc;
@@ -95,7 +96,7 @@ bool loginApi() {
 
 // ===== Parse JSONL from watch =====
 // Forventer linjer som:
-// { "hr": 72}
+// {"hr": 72}
 void parseJsonlAndSend(const String& chunk) {
   int start = 0;
   long lineNo = 0;
@@ -108,27 +109,45 @@ void parseJsonlAndSend(const String& chunk) {
     line.trim();
 
     if (line.length() > 0) {
+
+      // FILTER OUT REPL / GARBAGE
+      if (line.startsWith(">>>") ||
+          line.indexOf("wasp.system.run") >= 0 ||
+          line.indexOf("Watch already running") >= 0 ||
+          line.indexOf("===END===") >= 0) {
+        start = end + 1;
+        continue;
+      }
+
+      // ONLY PROCESS JSON LINES
+      if (!line.startsWith("{") || !line.endsWith("}")) {
+        start = end + 1;
+        continue;
+      }
+
       lineNo++;
 
-      // spring linjer over vi allerede har sendt
+      // Skip already processed lines
       if (lineNo <= lastProcessedLine) {
         start = end + 1;
         continue;
       }
 
-      if (line.startsWith("{") && line.endsWith("}")) {
-        StaticJsonDocument<128> doc;
-        DeserializationError err = deserializeJson(doc, line);
+      // Parse JSON
+      StaticJsonDocument<128> doc;
+      DeserializationError err = deserializeJson(doc, line);
 
-        if (!err && doc["hr"].is<int>()) {
-          int hr = doc["hr"].as<int>();
-          Serial.printf("Parsed HR: %d\n", hr);
-          sendHeartRate(hr);
-          lastProcessedLine = lineNo;
-        } else {
-          Serial.print("Skipping malformed line: ");
-          Serial.println(line);
-        }
+      if (!err && doc["hr"].is<int>()) {
+        int hr = doc["hr"].as<int>();
+
+        Serial.printf("Parsed HR: %d\n", hr);
+
+        sendHeartRate(hr);
+
+        lastProcessedLine = lineNo;
+      } else {
+        Serial.print("Skipping malformed JSON: ");
+        Serial.println(line);
       }
     }
 
@@ -237,25 +256,35 @@ void writeRepl(const String& cmd, uint16_t delayMs = 300) {
 
 // ===== Fetch file from watch =====
 void fetchHeartFile() {
-    if (!connected) return;
+  if (!connected) return;
 
-    replBuffer = "";
+  replBuffer = "";
 
-    // stop det der kører og få REPL
-    writeRepl(String((char)0x03), 800);
+  // 1. STOP watch + enter REPL
+  writeRepl(String((char)0x03), 800);
 
-    // læs fil linje for linje i én one-liner
-    writeRepl("for line in open('hr_data.jsonl'): print(line,end='')\r\n", 4000);
+  // læs fil linje for linje i én one-liner
+  writeRepl(commandToWrite, 5000);
+  writeRepl("\r\n", 500);  // <-- THIS triggers execution
+  writeRepl("print('===END===')\r\n", 800);
 
-    // start wasp igen
-    writeRepl("wasp.system.run()\r\n", 800);
-
+  // 3. Wait until full response arrives
+  if (replBuffer.indexOf("===END===") == -1) {
+    Serial.println("ERROR: Did not receive full file!");
     Serial.println(replBuffer);
+    return;
+  }
 
-    parseJsonAndSend(replBuffer);
+  // 4. DEBUG print
+  Serial.println("RAW BUFFER:");
+  Serial.println(replBuffer);
 
-    writeRepl("wasp.system.run()\r\n", 800);
-}
+  // 5. Parse ONLY after full data received
+  parseJsonlAndSend(replBuffer);
+
+  // 6. Restart watch AFTER parsing
+  //writeRepl("wasp.system.run()\r\n", 800);
+} 
 
 // ===== BLE setup =====
 void setupBle() {
@@ -298,11 +327,12 @@ void loop() {
 
   if (connected && WiFi.status() == WL_CONNECTED) {
     unsigned long now = millis();
-    if (now - lastFetchMs > FETCH_INTERVAL_MS) {
+    if (now - lastFetchMs > FETCH_INTERVAL_MS || firstFetch == true) {
       lastFetchMs = now;
       Serial.println("\n=== Fetching hr_data.jsonl from watch ===");
       fetchHeartFile();
       Serial.println("\n=== Done ===");
+      firstFetch = false;
     }
   }
 
