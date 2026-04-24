@@ -188,10 +188,7 @@ class HeartratesaverApp:
             self.sample_count += 1
             self.status_text = "Saved"
 
-            self._append_measurement({
-                "t": now,
-                "bpm": self.last_bpm
-            })
+            self._append_measurement(self.last_bpm)
 
             self._update_session()
 
@@ -328,11 +325,11 @@ class HeartratesaverApp:
 
     def _start_session(self):
         # CLEAR OLD DATA FILE
-        try:
-            f = open(DATA_FILE, "w")
-            f.close()
-        except:
-            pass
+        #try:
+        #    f = open(DATA_FILE, "w")
+        #    f.close()
+        #except:
+        #    pass
         now = self._now()
         self.total = _DURATIONS[self.duration_idx] * 60
         self.remaining = self.total
