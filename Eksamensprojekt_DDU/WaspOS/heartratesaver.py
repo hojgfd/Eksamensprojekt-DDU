@@ -43,7 +43,7 @@ DATA_FILE = "hr_data.jsonl"
 _INTERVALS = (1, 2, 5)
 _DURATIONS = (1, 5, 10)   # minutes
 
-DEMO_MODE = True
+DEMO_MODE = False
 
 class HeartratesaverApp:
     """Log heart-rate samples to the watch filesystem."""
@@ -128,7 +128,8 @@ class HeartratesaverApp:
     # ---------------- Lifecycle ----------------
 
     def foreground(self):
-        wasp.watch.hrs.enable()
+        if not DEMO_MODE:
+            wasp.watch.hrs.enable()
         self.interval_btn = widgets.Button(25, 95, 190, 35, "INTERVAL")
         self.duration_btn = widgets.Button(25, 140, 190, 35, "DURATION")
         self.start_btn = widgets.Button(25, 190, 190, 35, "START")
@@ -247,7 +248,7 @@ class HeartratesaverApp:
         t.stop()
         del t
 
-        # --- 2) Try to get a BPM reading (needs ≥240 samples, like HeartApp) ---
+        # --- 2) Try to get a BPM reading (needs 240 samples, like HeartApp) ---
         if self._ppg is not None and len(self._ppg.data) >= 240:
             bpm = self._ppg.get_heart_rate()
             if bpm is not None and 30 < bpm < 220:   # sanity check
