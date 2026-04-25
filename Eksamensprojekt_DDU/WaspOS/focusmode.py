@@ -61,7 +61,7 @@ class FocusmodeApp:
         self.total = data["total"]
         self.distractions = data.get("distractions", 0)
 
-        elapsed = int(time.time() - data["start"])
+        elapsed = int(time.ticks_ms() // 1000 - data["start"])
         self.remaining = self.total - elapsed
 
         if self.remaining <= 0:
@@ -170,7 +170,7 @@ class FocusmodeApp:
         self.running = True
         self.page = _RUNNING
 
-        now = time.time()
+        now = time.ticks_ms() // 1000
 
         self._save_session({
             "start": now,
